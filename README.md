@@ -1,1 +1,3 @@
 # Fast LLM Inference
+## TODO List
+The implementation followed [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/pdf/2211.17192)
