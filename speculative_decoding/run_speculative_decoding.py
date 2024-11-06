@@ -5,7 +5,7 @@ import time
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from transformers import LlamaForCausalLM, GPT2TokenizerFast, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
 from sampling import sample_next_token
 
@@ -148,12 +148,12 @@ if __name__ == "__main__":
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     # Load Tokenizer
-    draft_tokenizer = GPT2TokenizerFast.from_pretrained(draft_model_path)
-    target_tokenizer = GPT2TokenizerFast.from_pretrained(target_model_path)
+    draft_tokenizer = AutoTokenizer.from_pretrained(draft_model_path)
+    target_tokenizer = AutoTokenizer.from_pretrained(target_model_path)
 
     # Load Model
-    draft_model = LlamaForCausalLM.from_pretrained(draft_model_path, torch_dtype=torch.bfloat16).to(device)
-    target_model = LlamaForCausalLM.from_pretrained(target_model_path, torch_dtype=torch.bfloat16).to(device)
+    draft_model = AutoModelForCausalLM.from_pretrained(draft_model_path, torch_dtype=torch.bfloat16).to(device)
+    target_model = AutoModelForCausalLM.from_pretrained(target_model_path, torch_dtype=torch.bfloat16).to(device)
 
     # Tokenize
     messages = [
