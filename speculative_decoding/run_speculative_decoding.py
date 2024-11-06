@@ -1,11 +1,23 @@
 from typing import Dict, List, Optional, Tuple
 
+import copy
+import time
+
 import torch
 from torch.nn.utils.rnn import pad_sequence
-
 from transformers import LlamaForCausalLM, GPT2TokenizerFast, PreTrainedTokenizerBase
 
 from sampling import sample_next_token
+
+
+def calculate_continuous_acceptance(acceptance_mask):
+    continuous_acceptance = 0
+    for accepted in acceptance_mask.long().squeeze(0):
+        if accepted == 1:
+            continuous_acceptance += 1
+        else:
+            break
+    return continuous_acceptance
 
 
 def drafter_speculative_decode(
@@ -52,7 +64,7 @@ def target_speculative_decode(
     top_k: Optional[int] = 0,  # Default is 0, it means do not select top-k tokens
     top_p: Optional[float] = 1.0,
     repetition_penalty: Optional[float] = 1.0,
-) -> Tuple[Dict[str, torch.Tensor], torch.FloatTensor]:
+) -> Tuple[Dict[str, torch.Tensor], bool, int]:
     with torch.no_grad():
         outputs = target_model(**inputs)
 
@@ -95,6 +107,8 @@ def target_speculative_decode(
     acceptance_mask = torch.ones_like(selected_draft_probs, dtype=torch.bool)
     acceptance_mask[rejection_masks] = False
 
+    is_end = False
+
     # Concat `input_ids`
     if torch.all(acceptance_mask):
         input_ids = torch.cat([inputs["input_ids"], next_token], dim=-1)
@@ -104,16 +118,18 @@ def target_speculative_decode(
         new_attention_mask = []
 
         for batch_idx in range(next_tokens.shape[0]):
-            for pos_idx in range(acceptance_mask[batch_idx].shape[0]):
-                if not acceptance_mask[batch_idx][pos_idx]:
-                    gamma = next_tokens.shape[1] - 1
-                    start_idx = inputs["input_ids"].shape[1] - gamma
+            gamma = next_tokens.shape[1] - 1
+            start_idx = inputs["input_ids"].shape[1] - gamma
 
+            for pos_idx in range(acceptance_mask[batch_idx].shape[0]):
+                if (acceptance_mask[batch_idx][pos_idx] and inputs["input_ids"][batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id) or not acceptance_mask[batch_idx][pos_idx]:
+                # if not acceptance_mask[batch_idx][pos_idx]:
                     inputs["input_ids"][batch_idx][start_idx+pos_idx] = next_tokens[batch_idx][pos_idx]
 
                     new_input_ids.append(inputs["input_ids"][batch_idx][:start_idx+pos_idx+1])
                     new_attention_mask.append(inputs["attention_mask"][batch_idx][:start_idx+pos_idx+1])
                     
+                    is_end = inputs["input_ids"][batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id
                     break
 
         input_ids = pad_sequence(new_input_ids, batch_first=True, padding_value=target_tokenizer.pad_token_id)
@@ -122,7 +138,7 @@ def target_speculative_decode(
     inputs["input_ids"] = input_ids
     inputs["attention_mask"] = attention_mask
 
-    return inputs
+    return inputs, is_end, calculate_continuous_acceptance(acceptance_mask)
 
 
 if __name__ == "__main__":
@@ -149,7 +165,6 @@ if __name__ == "__main__":
         ],
     ]
 
-
     input_text=draft_tokenizer.apply_chat_template(messages, tokenize=False)
     inputs = draft_tokenizer(
         input_text,
@@ -159,25 +174,61 @@ if __name__ == "__main__":
         padding=True,
     ).to(device)
 
+    is_end = False
 
-    # Draft model
-    target_inputs, draft_probs = drafter_speculative_decode(
-        draft_model=draft_model,
-        draft_tokenizer=draft_tokenizer,
-        inputs=inputs,
-        gamma=10,
-    )
+    # Record
+    raw_inputs = copy.deepcopy(inputs)
+    raw_token_num = raw_inputs["input_ids"].shape[1]
+    start_time = time.time()
 
-    print(target_inputs["input_ids"])
-    print("".join(draft_tokenizer.batch_decode(target_inputs["input_ids"][0])))
+    total_draft_tokens = 0
+    total_accept_tokens = 0
+    gamma = 5
+    max_new_tokens = 100
 
-    # Target model
-    outputs = target_speculative_decode(
-        target_model=target_model,
-        target_tokenizer=target_tokenizer,
-        inputs=target_inputs,
-        draft_probs=draft_probs,
-    )
+    while not is_end:
+        # Draft model
+        target_inputs, draft_probs = drafter_speculative_decode(
+            draft_model=draft_model,
+            draft_tokenizer=draft_tokenizer,
+            inputs=inputs,
+            gamma=gamma,
+        )
 
-    print(outputs["input_ids"])
-    print("".join(target_tokenizer.batch_decode(outputs["input_ids"][0])))
+        total_draft_tokens += gamma
+
+        # Target model
+        outputs, is_end, accept_tokens = target_speculative_decode(
+            target_model=target_model,
+            target_tokenizer=target_tokenizer,
+            inputs=target_inputs,
+            draft_probs=draft_probs,
+        )
+
+        total_accept_tokens += accept_tokens
+
+        inputs = outputs
+
+        if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
+            break
+
+    # print(outputs["input_ids"])
+    # print("".join(target_tokenizer.batch_decode(outputs["input_ids"][0])))
+    print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
+    print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
+    print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}")
+
+    # Normal
+    start_time = time.time()
+    response = target_model.generate(**raw_inputs, max_new_tokens=100)
+    # print(response)
+    print(f"Generate token number: {response.shape[1] - raw_token_num}")
+    print(f"Normal Target Model Decoding Spent Time: {time.time() - start_time} seconds.")
+
+    # Normal
+    start_time = time.time()
+    response = draft_model.generate(**raw_inputs, max_new_tokens=100)
+    # print(response)
+    print(f"Generate token number: {response.shape[1] - raw_token_num}")
+    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.")
+
