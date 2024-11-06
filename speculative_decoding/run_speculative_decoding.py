@@ -47,7 +47,7 @@ def drafter_speculative_decode(
 
         draft_probs.append(probs)
         input_ids = torch.cat([inputs["input_ids"], next_tokens[:, -1:]], dim=-1)
-        attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device.type)], dim=-1)
+        attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device)], dim=-1)
 
         inputs["input_ids"] = input_ids
         inputs["attention_mask"] = attention_mask
@@ -112,7 +112,7 @@ def target_speculative_decode(
     # Concat `input_ids`
     if torch.all(acceptance_mask):
         input_ids = torch.cat([inputs["input_ids"], next_token], dim=-1)
-        attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device.type)], dim=-1)
+        attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device)], dim=-1)
     else:
         new_input_ids = []
         new_attention_mask = []
@@ -219,16 +219,28 @@ if __name__ == "__main__":
     print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}")
 
     # Normal
+    gamma = 100
     start_time = time.time()
-    response = target_model.generate(**raw_inputs, max_new_tokens=100)
+    target_inputs, draft_probs = drafter_speculative_decode(
+        draft_model=target_model,
+        draft_tokenizer=draft_tokenizer,
+        inputs=inputs,
+        gamma=gamma,
+    )
     # print(response)
-    print(f"Generate token number: {response.shape[1] - raw_token_num}")
+    print(f"Generate token number: {gamma}")
     print(f"Normal Target Model Decoding Spent Time: {time.time() - start_time} seconds.")
 
-    # Normal
+    # Normal Target Model Speed
+
     start_time = time.time()
-    response = draft_model.generate(**raw_inputs, max_new_tokens=100)
+    target_inputs, draft_probs = drafter_speculative_decode(
+        draft_model=draft_model,
+        draft_tokenizer=draft_tokenizer,
+        inputs=inputs,
+        gamma=gamma,
+    )
     # print(response)
-    print(f"Generate token number: {response.shape[1] - raw_token_num}")
+    print(f"Generate token number: {gamma}")
     print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.")
 
