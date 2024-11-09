@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional, Tuple
 
+import argparse
 import copy
 import time
 
@@ -10,7 +11,25 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from sampling import sample_next_token
 
 
-def calculate_continuous_acceptance(acceptance_mask):
+# parser.add_argument("--target_model_path", type=str, default="HuggingFaceTB/SmolLM2-1.7B-Instruct")
+# parser.add_argument("--draft_model_path", type=str, default="HuggingFaceTB/SmolLM2-135M-Instruct")
+# parser.add_argument("--device", type=str, default="cpu")
+# parser.add_argument("--question", type=str, default="What is the capital of Taiwan. And why?")
+# parser.add_argument("--gamma", type=int, default=5)
+# parser.add_argument("--test_token_num", type=int, default=100)
+
+"""
+python speculative_decoding/run_speculative_decoding.py \
+    --target_model_path HuggingFaceTB/SmolLM2-1.7B-Instruct \
+    --draft_model_path HuggingFaceTB/SmolLM2-135M-Instruct \
+    --device cuda:0 \
+    --question 'What is the capital of Taiwan. And why?' \
+    --gamma 5 \
+    --test_token_num 100 
+"""
+
+
+def calculate_continuous_acceptance(acceptance_mask: torch.BoolTensor) -> int:
     continuous_acceptance = 0
     for accepted in acceptance_mask.long().squeeze(0):
         if accepted == 1:
@@ -123,7 +142,6 @@ def target_speculative_decode(
 
             for pos_idx in range(acceptance_mask[batch_idx].shape[0]):
                 if (acceptance_mask[batch_idx][pos_idx] and inputs["input_ids"][batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id) or not acceptance_mask[batch_idx][pos_idx]:
-                # if not acceptance_mask[batch_idx][pos_idx]:
                     inputs["input_ids"][batch_idx][start_idx+pos_idx] = next_tokens[batch_idx][pos_idx]
 
                     new_input_ids.append(inputs["input_ids"][batch_idx][:start_idx+pos_idx+1])
@@ -141,11 +159,14 @@ def target_speculative_decode(
     return inputs, is_end, calculate_continuous_acceptance(acceptance_mask)
 
 
-if __name__ == "__main__":
-    # Settings
-    target_model_path = "../models/HuggingFaceTB--SmolLM2-1.7B-Instruct/"
-    draft_model_path = "../models/HuggingFaceTB--SmolLM2-135M-Instruct/"
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+def run_test(args) -> None:
+    # Device
+    device = torch.device(args.device if args.device != "cpu" and torch.cuda.is_available() else "cpu")
+    print(device)
+
+    # Model path 
+    target_model_path = args.target_model_path
+    draft_model_path = args.draft_model_path
 
     # Load Tokenizer
     draft_tokenizer = AutoTokenizer.from_pretrained(draft_model_path)
@@ -160,7 +181,7 @@ if __name__ == "__main__":
         [
             {
                 "role": "user",
-                "content": "What is the capital of Taiwan. And why?",
+                "content": args.question,
             },
         ],
     ]
@@ -183,8 +204,8 @@ if __name__ == "__main__":
 
     total_draft_tokens = 0
     total_accept_tokens = 0
-    gamma = 5
-    max_new_tokens = 100
+    gamma = args.gamma
+    max_new_tokens = args.test_token_num
 
     while not is_end:
         # Draft model
@@ -212,35 +233,43 @@ if __name__ == "__main__":
         if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
             break
 
-    # print(outputs["input_ids"])
-    # print("".join(target_tokenizer.batch_decode(outputs["input_ids"][0])))
     print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
     print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
     print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}")
 
     # Normal
-    gamma = 100
     start_time = time.time()
     target_inputs, draft_probs = drafter_speculative_decode(
         draft_model=target_model,
         draft_tokenizer=draft_tokenizer,
         inputs=inputs,
-        gamma=gamma,
+        gamma=args.test_token_num,
     )
-    # print(response)
-    print(f"Generate token number: {gamma}")
+
+    print(f"Generate token number: {args.test_token_num}")
     print(f"Normal Target Model Decoding Spent Time: {time.time() - start_time} seconds.")
 
     # Normal Target Model Speed
-
     start_time = time.time()
     target_inputs, draft_probs = drafter_speculative_decode(
         draft_model=draft_model,
         draft_tokenizer=draft_tokenizer,
         inputs=inputs,
-        gamma=gamma,
+        gamma=args.test_token_num,
     )
-    # print(response)
-    print(f"Generate token number: {gamma}")
+
+    print(f"Generate token number: {args.test_token_num}")
     print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.")
 
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target_model_path", type=str, default="HuggingFaceTB/SmolLM2-1.7B-Instruct")
+    parser.add_argument("--draft_model_path", type=str, default="HuggingFaceTB/SmolLM2-135M-Instruct")
+    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--question", type=str, default="What is the capital of Taiwan. And why?")
+    parser.add_argument("--gamma", type=int, default=5)
+    parser.add_argument("--test_token_num", type=int, default=100)
+    args = parser.parse_args()
+
+    run_test(args)
