@@ -1,5 +1,9 @@
 from typing import Dict, List, Optional, Tuple
 
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import argparse
 import copy
 import time
@@ -8,7 +12,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
-from sampling import sample_next_token
+from sampling.sampling import sample_next_token
 
 
 # parser.add_argument("--target_model_path", type=str, default="HuggingFaceTB/SmolLM2-1.7B-Instruct")
