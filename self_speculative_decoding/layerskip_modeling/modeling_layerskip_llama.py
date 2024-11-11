@@ -35,7 +35,7 @@ from transformers.models.llama.modeling_llama import (
     LLAMA_ATTENTION_CLASSES,
 )
 from transformers.cache_utils import Cache, DynamicCache, StaticCache
-from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPast, CausalLMOutputWithPast
+from transformers.modeling_outputs import BaseModelOutputWithPast, CausalLMOutputWithPast
 from transformers.modeling_attn_mask_utils import AttentionMaskConverter
 
 
@@ -48,9 +48,8 @@ class LayerSkipLlamaDecoderLayer(torch.nn.Module):
         super().__init__()
 
         # Set skip layer
-        skip_layer_ids = {"attn": [], "mlp": []}
         self.draft_mode = False
-        self.skip_layer_ids = skip_layer_ids
+        self.skip_layer_ids = {"attn": [], "mlp": []}
         self.layer_idx = layer_idx
     
         self.hidden_size = config.hidden_size
@@ -135,9 +134,8 @@ class LayerSkipLlamaModel(LlamaPreTrainedModel):
         super().__init__(config)
 
         # Set skip layer
-        skip_layer_ids = {"attn": [], "mlp": []}
         self.draft_mode = False
-        self.skip_layer_ids = skip_layer_ids
+        self.skip_layer_ids = {"attn": [], "mlp": []}
 
         self.padding_idx = config.pad_token_id
         self.vocab_size = config.vocab_size
@@ -392,9 +390,8 @@ class LayerSkipLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         super().__init__(config)
 
         # Set skip layer
-        skip_layer_ids = {"attn": [], "mlp": []}
         self.draft_mode = False
-        self.skip_layer_ids = skip_layer_ids
+        self.skip_layer_ids = {"attn": [], "mlp": []}
 
         self.model = LayerSkipLlamaModel(config)
         self.vocab_size = config.vocab_size
