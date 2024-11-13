@@ -27,7 +27,6 @@ if __name__ == "__main__":
 
     model.set_skip_layer_ids(skip_layer_ids=skip_layer_ids)
 
-
     messages = [
         [
             {
@@ -36,7 +35,6 @@ if __name__ == "__main__":
             },
         ],
     ]
-
 
     # Tokenize
     input_text=tokenizer.apply_chat_template(messages, tokenize=False)
