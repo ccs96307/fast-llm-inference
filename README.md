@@ -4,20 +4,19 @@
 ## TODO List
 
 ### November 2024
-- **[x] 2024/11/08** | Complete `Speculative Decoding` following the paper [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/pdf/2211.17192)
-- **[ ] 2024/11/15** | Implement `Self-Speculative Decoding` as per [Draft & Verify - Lossless Large Language Model Acceleration via Self-Speculative Decoding](https://arxiv.org/pdf/2309.08168)
+- [x] **2024/11/08** | Complete `Speculative Decoding` following the paper [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/pdf/2211.17192)
+- [ ] **2024/11/15** | Implement `Self-Speculative Decoding` as per [Draft & Verify - Lossless Large Language Model Acceleration via Self-Speculative Decoding](https://arxiv.org/pdf/2309.08168)
   - [x] LayerSkip model architecture
   - [x] Bayesian Optimization for Layer Skip Selection
   - [ ] Optimization
-- **[ ] 2024/11/22** | Develop `Kangaroo` following [Kangaroo - Lossless Self-Speculative Decoding via Double Early Exiting](https://arxiv.org/pdf/2404.18911)
+- [ ] **2024/11/22** | Develop `Kangaroo` following [Kangaroo - Lossless Self-Speculative Decoding via Double Early Exiting](https://arxiv.org/pdf/2404.18911)
   - [ ] Implement double early exits to improve speed.
   - [ ] Training Script
-- **[ ] 2024/11/29** | Implement `Medusa` from [Medusa - Simple LLM Inference Acceleration Framework with Multiple Decoding Heads](https://arxiv.org/pdf/2401.10774)
-  - **Goal**: Test with multi-headed architecture for versatility in decoding.
+- [ ] **2024/11/29** | Implement `Medusa` from [Medusa - Simple LLM Inference Acceleration Framework with Multiple Decoding Heads](https://arxiv.org/pdf/2401.10774)
 
 ### Additional Enhancements
-- **[ ] TBD** | Implement `prompt look-up decoding` per [prompt-lookup-decoding GitHub](https://github.com/apoorvumang/prompt-lookup-decoding)
-- **[ ] TBD** | Implement `UAG` (Universal Assisted Generation) as per [Universal Assisted Generation Blog](https://huggingface.co/blog/universal_assisted_generation)
+- [ ] **TBD** | Implement `prompt look-up decoding` per [prompt-lookup-decoding GitHub](https://github.com/apoorvumang/prompt-lookup-decoding)
+- [ ] **TBD** | Implement `UAG` (Universal Assisted Generation) as per [Universal Assisted Generation Blog](https://huggingface.co/blog/universal_assisted_generation)
 
 ---
 
