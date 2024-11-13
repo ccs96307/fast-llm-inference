@@ -15,13 +15,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenize
 from sampling.sampling import sample_next_token
 
 
-# parser.add_argument("--target_model_path", type=str, default="HuggingFaceTB/SmolLM2-1.7B-Instruct")
-# parser.add_argument("--draft_model_path", type=str, default="HuggingFaceTB/SmolLM2-135M-Instruct")
-# parser.add_argument("--device", type=str, default="cpu")
-# parser.add_argument("--question", type=str, default="What is the capital of Taiwan. And why?")
-# parser.add_argument("--gamma", type=int, default=5)
-# parser.add_argument("--test_token_num", type=int, default=100)
-
 """
 python speculative_decoding/run_speculative_decoding.py \
     --target_model_path HuggingFaceTB/SmolLM2-1.7B-Instruct \
