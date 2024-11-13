@@ -1,5 +1,10 @@
-# Fast LLM Inference
 # Fast LLM Inference - Optimized Task Plan
+I hope to implement some acceleration technologies for Large Language Models (LLMs) because I enjoy doing this myself and love the challenge of bringing research papers into real-world applications.
+
+If there are any technologies you'd like to develop or discuss, feel free to reach out. Thanks!
+
+I'm excited to dive deeper into AI research!  
+
 
 ## TODO List
 
