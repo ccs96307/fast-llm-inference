@@ -5,6 +5,19 @@ If there are any technologies you'd like to develop or discuss, feel free to rea
 
 I'm excited to dive deeper into AI research!  
 
+---
+
+## Updates Log
+### November 2024
+- **2024/11/08**: `Speculative Decoding` successfully implemented. Verified improved inference time with no noticeable accuracy degradation.
+- **2024/11/10**: Initial setup for `Self-Speculative Decoding` completed; data pipeline in place for testing draft-and-verify.
+- **2024/11/12**: Reviewing implementation challenges for `Self-Speculative Decoding` and evaluating model compatibility for improved efficiency.
+
+### Pending Decisions
+- **Prompt look-up decoding**: Determine timeline after reviewing initial implementations.
+- **UAG Integration**: Assess when to integrate after `Medusa` and `Kangaroo` are in place.
+
+---
 
 ## TODO List
 
@@ -20,17 +33,5 @@ I'm excited to dive deeper into AI research!
 - [ ] **2024/11/29** | Implement `Medusa` from [Medusa - Simple LLM Inference Acceleration Framework with Multiple Decoding Heads](https://arxiv.org/pdf/2401.10774)
 
 ### Additional Enhancements
-- [ ] **TBD** | Implement `prompt look-up decoding` per [prompt-lookup-decoding GitHub](https://github.com/apoorvumang/prompt-lookup-decoding)
+- [ ] **TBD** | Implement `prompt lookup decoding` per [prompt-lookup-decoding GitHub](https://github.com/apoorvumang/prompt-lookup-decoding)
 - [ ] **TBD** | Implement `UAG` (Universal Assisted Generation) as per [Universal Assisted Generation Blog](https://huggingface.co/blog/universal_assisted_generation)
-
----
-
-## Updates Log
-### November 2024
-- **2024/11/08**: `Speculative Decoding` successfully implemented. Verified improved inference time with no noticeable accuracy degradation.
-- **2024/11/10**: Initial setup for `Self-Speculative Decoding` completed; data pipeline in place for testing draft-and-verify.
-- **2024/11/12**: Reviewing implementation challenges for `Self-Speculative Decoding` and evaluating model compatibility for improved efficiency.
-
-### Pending Decisions
-- **Prompt look-up decoding**: Determine timeline after reviewing initial implementations.
-- **UAG Integration**: Assess when to integrate after `Medusa` and `Kangaroo` are in place.
