@@ -239,7 +239,7 @@ if __name__ == "__main__":
         total_accept_tokens += accept_tokens
         raw_inputs = outputs
 
-        if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
+        if raw_inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
             break
 
     print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
