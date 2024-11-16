@@ -186,5 +186,5 @@ if __name__ == "__main__":
 
     searcher.optimize_speculative_speed(
         samples=samples,
-        n_trials=100,
+        n_trials=1000,
     )
