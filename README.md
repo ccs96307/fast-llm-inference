@@ -14,7 +14,7 @@ I'm excited to dive deeper into AI research!
 - **2024/11/12**: Reviewing implementation challenges for `Self-Speculative Decoding` and evaluating model compatibility for improved efficiency.
 
 ### Pending Decisions
-- **Prompt look-up decoding**: Determine timeline after reviewing initial implementations.
+- **Prompt lookup decoding**: Determine timeline after reviewing initial implementations.
 - **UAG Integration**: Assess when to integrate after `Medusa` and `Kangaroo` are in place.
 
 ---
@@ -26,7 +26,9 @@ I'm excited to dive deeper into AI research!
 - [ ] **2024/11/15** | Implement `Self-Speculative Decoding` as per [Draft & Verify - Lossless Large Language Model Acceleration via Self-Speculative Decoding](https://arxiv.org/pdf/2309.08168)
   - [x] LayerSkip model architecture
   - [x] Bayesian Optimization for Layer Skip Selection
+  - [ ] Adaption Draft-Exiting Mechanism
   - [ ] Optimization
+  - [ ] `gemma-2-9b-it` experiment
 - [ ] **2024/11/22** | Develop `Kangaroo` following [Kangaroo - Lossless Self-Speculative Decoding via Double Early Exiting](https://arxiv.org/pdf/2404.18911)
   - [ ] Implement double early exits to improve speed.
   - [ ] Training Script
@@ -35,3 +37,4 @@ I'm excited to dive deeper into AI research!
 ### Additional Enhancements
 - [ ] **TBD** | Implement `prompt lookup decoding` per [prompt-lookup-decoding GitHub](https://github.com/apoorvumang/prompt-lookup-decoding)
 - [ ] **TBD** | Implement `UAG` (Universal Assisted Generation) as per [Universal Assisted Generation Blog](https://huggingface.co/blog/universal_assisted_generation)
+
