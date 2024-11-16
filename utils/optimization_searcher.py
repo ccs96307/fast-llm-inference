@@ -1,4 +1,6 @@
 from typing import Dict, List, Callable, Optional
+
+import copy
 import time
 import gc
 
@@ -151,7 +153,9 @@ class LayerSkipStrategySearcher:
     def _run_inference(self, inputs, gamma=5, max_new_tokens=100):
         """Common inference logic for both objectives"""
         is_end = False
-        raw_token_num = inputs["input_ids"].shape[1]
+
+        trial_inputs = copy.deepcopy(inputs)
+        raw_token_num = trial_inputs["input_ids"].shape[1]
         total_draft_tokens = 0
         total_accept_tokens = 0
         generated_tokens = 0
@@ -162,7 +166,7 @@ class LayerSkipStrategySearcher:
                 target_inputs, draft_probs, real_generated_tokens = self.drafter_speculative_decode(
                     draft_model=self.model,
                     draft_tokenizer=self.tokenizer,
-                    inputs=inputs,
+                    inputs=trial_inputs,
                     gamma=gamma,
                     confidence_threshold_adjuster=self.adjuster,
                 )
@@ -185,14 +189,14 @@ class LayerSkipStrategySearcher:
                 )
             
             total_accept_tokens += accept_tokens
-            inputs = outputs
+            trial_inputs = outputs
             
             generated_tokens = inputs["input_ids"].shape[1] - raw_token_num
             if generated_tokens >= max_new_tokens:
                 break
             
             # Free memory
-            del target_inputs, draft_probs
+            del target_inputs, draft_probs, trial_inputs
             torch.cuda.empty_cache()
         
         return total_accept_tokens, total_draft_tokens, generated_tokens
