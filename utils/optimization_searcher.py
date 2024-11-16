@@ -191,13 +191,13 @@ class LayerSkipStrategySearcher:
             total_accept_tokens += accept_tokens
             trial_inputs = outputs
             
-            generated_tokens = inputs["input_ids"].shape[1] - raw_token_num
+            generated_tokens = trial_inputs["input_ids"].shape[1] - raw_token_num
             if generated_tokens >= max_new_tokens:
                 break
             
-            # Free memory
-            del target_inputs, draft_probs, trial_inputs
-            torch.cuda.empty_cache()
+        # Free memory
+        del target_inputs, draft_probs, trial_inputs
+        torch.cuda.empty_cache()
         
         return total_accept_tokens, total_draft_tokens, generated_tokens
 
