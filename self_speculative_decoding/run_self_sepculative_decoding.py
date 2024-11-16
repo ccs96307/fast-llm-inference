@@ -168,7 +168,7 @@ if __name__ == "__main__":
     )
 
     skip_layer_ids = {
-        "attn": [1, 2, 3, 4, 5, 6, 7, 8, 15, 18],
+        "attn": [2, 15, 18],
         "mlp": [2, 15, 18],
     }
 
@@ -192,87 +192,59 @@ if __name__ == "__main__":
         padding=True,
     ).to(device)
 
-    # is_end = False
-
-    # # Record
-    # raw_inputs = copy.deepcopy(inputs)
-    # raw_token_num = raw_inputs["input_ids"].shape[1]
-    # start_time = time.time()
-
-    total_draft_tokens = 0
-    total_accept_tokens = 0
-    gamma = 5
-    max_new_tokens = 100
-
-    # while not is_end:
-    #     # Draft model
-    #     target_inputs, draft_probs, real_generated_tokens = drafter_speculative_decode(
-    #         draft_model=model,
-    #         draft_tokenizer=tokenizer,
-    #         inputs=inputs,
-    #         gamma=gamma,
-    #         confidence_threshold_adjuster=confidence_threshold_adjuster,
-    #     )
-
-    #     total_draft_tokens += real_generated_tokens        
-
-    #     # Target model
-    #     outputs, is_end, accept_tokens = target_speculative_decode(
-    #         target_model=model,
-    #         target_tokenizer=tokenizer,
-    #         inputs=target_inputs,
-    #         draft_probs=draft_probs,
-    #     )
-
-    #     # Update exit threshold
-    #     confidence_threshold_adjuster.update(
-    #         num_matched_tokens=accept_tokens,
-    #         num_drafted_tokens=real_generated_tokens,
-    #     )
-
-    #     total_accept_tokens += accept_tokens
-    #     inputs = outputs
-
-    #     if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
-    #         break
-
-    # print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
-    # print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
-    # print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
-
     # Warm up the model (CUDA)
     inputs_dummy = {k: v.clone() for k, v in inputs.items()}
     with torch.no_grad():
         model(**inputs_dummy)
     torch.cuda.synchronize()
 
-    # Normal Draft Model Speed
+    is_end = False
+
+    # Record
     raw_inputs = copy.deepcopy(inputs)
+    raw_token_num = raw_inputs["input_ids"].shape[1]
     start_time = time.time()
-    outputs, draft_probs, _ = drafter_speculative_decode(
-        draft_model=model,
-        draft_tokenizer=tokenizer,
-        inputs=raw_inputs,
-        gamma=max_new_tokens,
-        draft_mode=True,
-    )
 
-    print(f"Generate token number: {max_new_tokens}")
-    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
+    total_draft_tokens = 0
+    total_accept_tokens = 0
+    gamma = 5
+    max_new_tokens = 100
 
-    # Normal Draft Model Speed
-    raw_inputs = copy.deepcopy(inputs)
-    start_time = time.time()
-    outputs, draft_probs, _ = drafter_speculative_decode(
-        draft_model=model,
-        draft_tokenizer=tokenizer,
-        inputs=raw_inputs,
-        gamma=max_new_tokens,
-        draft_mode=True,
-    )
+    while not is_end:
+        # Draft model
+        target_inputs, draft_probs, real_generated_tokens = drafter_speculative_decode(
+            draft_model=model,
+            draft_tokenizer=tokenizer,
+            inputs=raw_inputs,
+            gamma=gamma,
+            confidence_threshold_adjuster=confidence_threshold_adjuster,
+        )
 
-    print(f"Generate token number: {max_new_tokens}")
-    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
+        total_draft_tokens += real_generated_tokens        
+
+        # Target model
+        outputs, is_end, accept_tokens = target_speculative_decode(
+            target_model=model,
+            target_tokenizer=tokenizer,
+            inputs=target_inputs,
+            draft_probs=draft_probs,
+        )
+
+        # Update exit threshold
+        confidence_threshold_adjuster.update(
+            num_matched_tokens=accept_tokens,
+            num_drafted_tokens=real_generated_tokens,
+        )
+
+        total_accept_tokens += accept_tokens
+        raw_inputs = outputs
+
+        if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
+            break
+
+    print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
+    print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
+    print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
 
     # Normal Target Model Speed
     raw_inputs = copy.deepcopy(inputs)
