@@ -8,22 +8,15 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import copy
 import time
 
+from datasets import load_dataset
 import torch
 from torch.nn.utils.rnn import pad_sequence
 from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from layerskip_modeling.modeling_layerskip_gemma2 import LayerSkipGemma2ForCausalLM
 from sampling.sampling import sample_next_token
-
-
-def calculate_continuous_acceptance(acceptance_mask: torch.BoolTensor) -> int:
-    continuous_acceptance = 0
-    for accepted in acceptance_mask.long().squeeze(0):
-        if accepted == 1:
-            continuous_acceptance += 1
-        else:
-            break
-    return continuous_acceptance
+from utils.utils import calculate_continuous_acceptance, AdaptiveDraftExitAduster
+from utils.optimization_searcher import LayerSkipStrategySearcher
 
 
 def drafter_speculative_decode(
@@ -35,10 +28,12 @@ def drafter_speculative_decode(
     top_k: Optional[int] = 0,  # Default is 0, it means do not select top-k tokens
     top_p: Optional[float] = 1.0,
     repetition_penalty: Optional[float] = 1.0,
-    draft_mode: bool = True
+    draft_mode: bool = True,
+    confidence_threshold_adjuster: Optional[AdaptiveDraftExitAduster] = None,
 ) -> Tuple[Dict[str, torch.Tensor], torch.FloatTensor]:
     draft_model.set_draft_mode(draft_mode)
     draft_probs = []
+    real_generated_tokens = 0
 
     for idx in range(gamma):
         with torch.no_grad():
@@ -60,9 +55,16 @@ def drafter_speculative_decode(
         inputs["input_ids"] = input_ids
         inputs["attention_mask"] = attention_mask
 
-    draft_model.set_draft_mode(True)
+        real_generated_tokens += 1
 
-    return inputs, torch.cat(draft_probs, dim=1)
+        # Early exit
+        if confidence_threshold_adjuster and confidence_threshold_adjuster.should_exit(draft_prob=probs[0, 0, next_tokens.item()]):
+            # print(confidence_threshold_adjuster.get_state())
+            break
+
+    draft_model.set_draft_mode(False)
+
+    return inputs, torch.cat(draft_probs, dim=1), real_generated_tokens
 
 
 def target_speculative_decode(
@@ -151,117 +153,38 @@ def target_speculative_decode(
     return inputs, is_end, calculate_continuous_acceptance(acceptance_mask)
 
 
-def objective(trial):
-    # Define search space, sssume we can skip up to six layers
-    total_layers = 26
-
-    # Determine skip or not for `attn`
-    skip_attn_layers = []
-    for i in range(total_layers):
-        skip = trial.suggest_int(f'skip_attn_layer_{i}', 0, 1)
-        if skip == 1:
-            skip_attn_layers.append(i)
-
-    # Determine skip or not for `mlp`
-    skip_mlp_layers = []
-    for i in range(total_layers):
-        skip = trial.suggest_int(f'skip_mlp_layer_{i}', 0, 1)
-        if skip == 1:
-            skip_mlp_layers.append(i)
-
-    # Disable set to 0 both
-    if len(skip_attn_layers) == 0 and len(skip_mlp_layers) == 0:
-        raise optuna.TrialPruned()
-
-    skip_layer_ids = {
-        "attn": skip_attn_layers,
-        "mlp": skip_mlp_layers,
-    }
-
-    # Set the skip strategy
-    model.set_skip_layer_ids(skip_layer_ids=skip_layer_ids)
-
-    messages = [
-        [
-            {
-                "role": "user",
-                "content": "What is the capital of Taiwan. And why?",
-            },
-        ],
-    ]
-
-    input_text = tokenizer.apply_chat_template(messages, tokenize=False)
-    inputs = tokenizer(
-        input_text,
-        return_tensors="pt",
-        max_length=512,
-        truncation=True,
-        padding=True,
-    ).to(device)
-
-    is_end = False
-
-    # Record
-    raw_inputs = copy.deepcopy(inputs)
-    raw_token_num = raw_inputs["input_ids"].shape[1]
-
-    total_draft_tokens = 0
-    total_accept_tokens = 0
-    gamma = 5
-    max_new_tokens = 100
-
-    while not is_end:
-        # Draft model
-        target_inputs, draft_probs = drafter_speculative_decode(
-            draft_model=model,
-            draft_tokenizer=tokenizer,
-            inputs=inputs,
-            gamma=gamma,
-        )
-
-        total_draft_tokens += gamma
-
-        # Target model
-        outputs, is_end, accept_tokens = target_speculative_decode(
-            target_model=model,
-            target_tokenizer=tokenizer,
-            inputs=target_inputs,
-            draft_probs=draft_probs,
-        )
-
-        total_accept_tokens += accept_tokens
-        inputs = outputs
-
-        if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
-            break
-
-    # Compute acceptance rate
-    accept_rate = total_accept_tokens / total_draft_tokens
-
-    print(f"attn_skip: {skip_attn_layers}, mlp_skip: {skip_mlp_layers}, Accept Rate: {accept_rate}")
-
-    # Assume we want to maximize `accept_rate`
-    return accept_rate
-
-
 if __name__ == "__main__":
+    # Load tokenizer and model
     pretrained_model_name_or_path = "../models/google--gemma-2-2b-it/"
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
     model = LayerSkipGemma2ForCausalLM.from_pretrained(pretrained_model_name_or_path, torch_dtype=torch.bfloat16).to(device)
 
-    # Init
-    skip_layer_ids = {
-        "attn": [],
-        "mlp": [],
-    }
+    # Load dataset
+    dataset = load_dataset("shibing624/sharegpt_gpt4")
+    samples = dataset["train"]["conversations"][:10]
+    samples = [[{"role": sample[0]["from"].replace("human", "user").replace("gpt", "assistant"), "content": sample[0]["value"]}] for sample in samples]
 
-    model.set_skip_layer_ids(skip_layer_ids=skip_layer_ids)
+    # Adaptive draft threshold adjuster
+    confidence_threshold_adjuster = AdaptiveDraftExitAduster(
+        target_matchness=0.5,
+        beta1=0.5,
+        beta2=0.9,
+        epsilon=0.01,
+        max_step_draft=8,
+    )
 
-    # Create
-    study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=50)
+    # Searcher
+    searcher = LayerSkipStrategySearcher(
+        model=model,
+        tokenizer=tokenizer,
+        device=device,
+        drafter_speculative_decode=drafter_speculative_decode,
+        target_speculative_decode=target_speculative_decode,
+        adjuster=confidence_threshold_adjuster,
+    )
 
-    print("The best params:", study.best_params)
-    print("The best accept_rate:", study.best_value)
+    searcher.optimize_speculative_speed(
+        samples=samples,
+        n_trials=100,
+    )

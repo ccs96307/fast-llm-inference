@@ -17,11 +17,36 @@ class AdaptiveDraftExitAduster:
         :param epsilon: Adjust the step size each time
         :param max_step_draft: The maximum number of steps for draft generation
         """
-        self.target_matchness = target_matchness
-        self.beta1 = beta1
-        self.beta2 = beta2
-        self.epsilon = epsilon
-        self.max_step_draft = max_step_draft
+
+        self.save_init_status(
+            target_matchness=target_matchness,
+            beta1=beta1,
+            beta2=beta2,
+            epsilon=epsilon,
+            max_step_draft=max_step_draft,
+        )
+        self.reset()
+
+    def save_init_status(
+        self,
+        target_matchness: float = 0.9,
+        beta1: float = 0.5,
+        beta2: float = 0.9,
+        epsilon: float = 0.01,
+        max_step_draft: int = 8,
+    ) -> None:
+        self.init_target_matchness = target_matchness
+        self.init_beta1 = beta1
+        self.init_beta2 = beta2
+        self.init_epsilon = epsilon
+        self.init_max_step_draft = max_step_draft
+
+    def reset(self) -> None:
+        self.target_matchness = self.init_target_matchness
+        self.beta1 = self.init_beta1
+        self.beta2 = self.init_beta2
+        self.epsilon = self.init_epsilon
+        self.max_step_draft = self.init_max_step_draft
 
         # Dynamic status
         self.curr_matchness = 0.0

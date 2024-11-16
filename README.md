@@ -25,9 +25,10 @@ I'm excited to dive deeper into AI research!
 - [x] **2024/11/08** | Complete `Speculative Decoding` following the paper [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/pdf/2211.17192)
 - [ ] **2024/11/15** | Implement `Self-Speculative Decoding` as per [Draft & Verify - Lossless Large Language Model Acceleration via Self-Speculative Decoding](https://arxiv.org/pdf/2309.08168)
   - [x] LayerSkip model architecture
-  - [x] Bayesian Optimization for Layer Skip Selection
-  - [ ] Adaption Draft-Exiting Mechanism
+  - [x] Bayesian Optimization for Layer Skip Selection (AR)
+  - [x] Adaption Draft-Exiting Mechanism
   - [ ] Optimization
+  - [ ] Bayesian Optimization for Layer Skip Selection (Speed) 
   - [ ] `gemma-2-9b-it` experiment
 - [ ] **2024/11/22** | Develop `Kangaroo` following [Kangaroo - Lossless Self-Speculative Decoding via Double Early Exiting](https://arxiv.org/pdf/2404.18911)
   - [ ] Implement double early exits to improve speed.
