@@ -192,6 +192,13 @@ def run_test(args) -> None:
         padding=True,
     ).to(device)
 
+    # Warm up the model (CUDA)
+    inputs_dummy = {k: v.clone() for k, v in inputs.items()}
+    with torch.no_grad():
+        draft_model(**inputs_dummy)
+        target_model(**inputs_dummy)
+    torch.cuda.synchronize()
+
     is_end = False
 
     # Record
@@ -232,31 +239,33 @@ def run_test(args) -> None:
 
     print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
     print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
-    print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}")
+    print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
 
-    # Normal
+    # Normal Target Model Speed
+    raw_inputs = copy.deepcopy(inputs)
     start_time = time.time()
     target_inputs, draft_probs = drafter_speculative_decode(
         draft_model=target_model,
         draft_tokenizer=draft_tokenizer,
-        inputs=inputs,
+        inputs=raw_inputs,
         gamma=args.test_token_num,
     )
 
     print(f"Generate token number: {args.test_token_num}")
-    print(f"Normal Target Model Decoding Spent Time: {time.time() - start_time} seconds.")
+    print(f"Normal Target Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
 
-    # Normal Target Model Speed
+    # Normal Draft Model Speed
+    raw_inputs = copy.deepcopy(inputs)
     start_time = time.time()
     target_inputs, draft_probs = drafter_speculative_decode(
         draft_model=draft_model,
         draft_tokenizer=draft_tokenizer,
-        inputs=inputs,
+        inputs=raw_inputs,
         gamma=args.test_token_num,
     )
 
     print(f"Generate token number: {args.test_token_num}")
-    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.")
+    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
 
 
 if __name__ == "__main__":

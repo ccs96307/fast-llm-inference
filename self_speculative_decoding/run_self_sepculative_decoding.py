@@ -14,17 +14,7 @@ from transformers import AutoTokenizer, PreTrainedTokenizerBase
 
 from layerskip_modeling.modeling_layerskip_gemma2 import LayerSkipGemma2ForCausalLM
 from sampling.sampling import sample_next_token
-
-
-
-def calculate_continuous_acceptance(acceptance_mask: torch.BoolTensor) -> int:
-    continuous_acceptance = 0
-    for accepted in acceptance_mask.long().squeeze(0):
-        if accepted == 1:
-            continuous_acceptance += 1
-        else:
-            break
-    return continuous_acceptance
+from utils.utils import calculate_continuous_acceptance, AdaptiveDraftExitAduster
 
 
 def drafter_speculative_decode(
@@ -36,10 +26,12 @@ def drafter_speculative_decode(
     top_k: Optional[int] = 0,  # Default is 0, it means do not select top-k tokens
     top_p: Optional[float] = 1.0,
     repetition_penalty: Optional[float] = 1.0,
-    draft_mode: bool = True
+    draft_mode: bool = True,
+    confidence_threshold_adjuster: Optional[AdaptiveDraftExitAduster] = None,
 ) -> Tuple[Dict[str, torch.Tensor], torch.FloatTensor]:
     draft_model.set_draft_mode(draft_mode)
     draft_probs = []
+    real_generated_tokens = 0
 
     for idx in range(gamma):
         with torch.no_grad():
@@ -61,9 +53,16 @@ def drafter_speculative_decode(
         inputs["input_ids"] = input_ids
         inputs["attention_mask"] = attention_mask
 
-    draft_model.set_draft_mode(True)
+        real_generated_tokens += 1
 
-    return inputs, torch.cat(draft_probs, dim=1)
+        # Early exit
+        if confidence_threshold_adjuster and confidence_threshold_adjuster.should_exit(draft_prob=probs[0, 0, next_tokens.item()]):
+            print(confidence_threshold_adjuster.get_state())
+            break
+
+    draft_model.set_draft_mode(False)
+
+    return inputs, torch.cat(draft_probs, dim=1), real_generated_tokens
 
 
 def target_speculative_decode(
@@ -155,21 +154,22 @@ def target_speculative_decode(
 if __name__ == "__main__":
     pretrained_model_name_or_path = "../models/google--gemma-2-2b-it/"
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {device}")
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
     model = LayerSkipGemma2ForCausalLM.from_pretrained(pretrained_model_name_or_path, torch_dtype=torch.bfloat16).to(device)
 
+    confidence_threshold_adjuster = AdaptiveDraftExitAduster(
+        target_matchness=0.5,
+        beta1=0.5,
+        beta2=0.9,
+        epsilon=0.01,
+        max_step_draft=8,
+    )
+
     skip_layer_ids = {
-        "attn": [
-            2,
-            15,
-            18,
-        ],
-        "mlp": [
-            2,
-            15,
-            18,
-        ]
+        "attn": [1, 2, 3, 4, 5, 6, 7, 8, 15, 18],
+        "mlp": [2, 15, 18],
     }
 
     model.set_skip_layer_ids(skip_layer_ids=skip_layer_ids)
@@ -192,53 +192,95 @@ if __name__ == "__main__":
         padding=True,
     ).to(device)
 
-    is_end = False
+    # is_end = False
 
-    # Record
-    raw_inputs = copy.deepcopy(inputs)
-    raw_token_num = raw_inputs["input_ids"].shape[1]
-    start_time = time.time()
+    # # Record
+    # raw_inputs = copy.deepcopy(inputs)
+    # raw_token_num = raw_inputs["input_ids"].shape[1]
+    # start_time = time.time()
 
     total_draft_tokens = 0
     total_accept_tokens = 0
     gamma = 5
     max_new_tokens = 100
 
-    while not is_end:
-        # Draft model
-        target_inputs, draft_probs = drafter_speculative_decode(
-            draft_model=model,
-            draft_tokenizer=tokenizer,
-            inputs=inputs,
-            gamma=gamma,
-        )
+    # while not is_end:
+    #     # Draft model
+    #     target_inputs, draft_probs, real_generated_tokens = drafter_speculative_decode(
+    #         draft_model=model,
+    #         draft_tokenizer=tokenizer,
+    #         inputs=inputs,
+    #         gamma=gamma,
+    #         confidence_threshold_adjuster=confidence_threshold_adjuster,
+    #     )
 
-        total_draft_tokens += gamma
+    #     total_draft_tokens += real_generated_tokens        
 
-        # Target model
-        outputs, is_end, accept_tokens = target_speculative_decode(
-            target_model=model,
-            target_tokenizer=tokenizer,
-            inputs=target_inputs,
-            draft_probs=draft_probs,
-        )
+    #     # Target model
+    #     outputs, is_end, accept_tokens = target_speculative_decode(
+    #         target_model=model,
+    #         target_tokenizer=tokenizer,
+    #         inputs=target_inputs,
+    #         draft_probs=draft_probs,
+    #     )
 
-        total_accept_tokens += accept_tokens
-        inputs = outputs
+    #     # Update exit threshold
+    #     confidence_threshold_adjuster.update(
+    #         num_matched_tokens=accept_tokens,
+    #         num_drafted_tokens=real_generated_tokens,
+    #     )
 
-        if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
-            break
+    #     total_accept_tokens += accept_tokens
+    #     inputs = outputs
 
-    print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
-    print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
-    print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
+    #     if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
+    #         break
 
-    # Normal
+    # print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
+    # print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
+    # print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
+
+    # Warm up the model (CUDA)
+    inputs_dummy = {k: v.clone() for k, v in inputs.items()}
+    with torch.no_grad():
+        model(**inputs_dummy)
+    torch.cuda.synchronize()
+
+    # Normal Draft Model Speed
+    raw_inputs = copy.deepcopy(inputs)
     start_time = time.time()
-    target_inputs, draft_probs = drafter_speculative_decode(
+    outputs, draft_probs, _ = drafter_speculative_decode(
         draft_model=model,
         draft_tokenizer=tokenizer,
-        inputs=inputs,
+        inputs=raw_inputs,
+        gamma=max_new_tokens,
+        draft_mode=True,
+    )
+
+    print(f"Generate token number: {max_new_tokens}")
+    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
+
+    # Normal Draft Model Speed
+    raw_inputs = copy.deepcopy(inputs)
+    start_time = time.time()
+    outputs, draft_probs, _ = drafter_speculative_decode(
+        draft_model=model,
+        draft_tokenizer=tokenizer,
+        inputs=raw_inputs,
+        gamma=max_new_tokens,
+        draft_mode=True,
+    )
+
+    print(f"Generate token number: {max_new_tokens}")
+    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
+
+    # Normal Target Model Speed
+    raw_inputs = copy.deepcopy(inputs)
+    start_time = time.time()
+    outputs, draft_probs, _ = drafter_speculative_decode(
+        draft_model=model,
+        draft_tokenizer=tokenizer,
+        inputs=raw_inputs,
         gamma=max_new_tokens,
         draft_mode=False,
     )
@@ -246,13 +288,15 @@ if __name__ == "__main__":
     print(f"Generate token number: {max_new_tokens}")
     print(f"Normal Target Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
 
-    # Normal Target Model Speed
+    # Normal Draft Model Speed
+    raw_inputs = copy.deepcopy(inputs)
     start_time = time.time()
-    target_inputs, draft_probs = drafter_speculative_decode(
+    outputs, draft_probs, _ = drafter_speculative_decode(
         draft_model=model,
         draft_tokenizer=tokenizer,
-        inputs=inputs,
+        inputs=raw_inputs,
         gamma=max_new_tokens,
+        draft_mode=True,
     )
 
     print(f"Generate token number: {max_new_tokens}")
