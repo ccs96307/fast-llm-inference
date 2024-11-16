@@ -1,8 +1,9 @@
 from typing import Dict, List, Callable, Optional
 
-import copy
-import time
 import gc
+import copy
+import json
+import time
 
 import optuna
 import torch
@@ -142,6 +143,11 @@ class LayerSkipStrategySearcher:
                     lambda study, trial: torch.cuda.empty_cache()
                 ]
             )
+
+            # Save best skip_layer_ids
+            best_skip_layers = self._get_skip_layers(study.best_trial, num_hidden_layers)
+            with open("skip_layer_ids.json", "w") as f:
+                json.dump(best_skip_layers, f)
             
             return {
                 "best_params": study.best_params,

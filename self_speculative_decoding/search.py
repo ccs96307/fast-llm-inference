@@ -170,7 +170,7 @@ if __name__ == "__main__":
         target_matchness=0.5,
         beta1=0.5,
         beta2=0.9,
-        epsilon=0.01,
+        epsilon=0.1,
         max_step_draft=8,
     )
 

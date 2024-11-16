@@ -29,11 +29,11 @@ class AdaptiveDraftExitAduster:
 
     def save_init_status(
         self,
-        target_matchness: float = 0.9,
-        beta1: float = 0.5,
-        beta2: float = 0.9,
-        epsilon: float = 0.01,
-        max_step_draft: int = 8,
+        target_matchness: float,
+        beta1: float,
+        beta2: float,
+        epsilon: float,
+        max_step_draft: int,
     ) -> None:
         self.init_target_matchness = target_matchness
         self.init_beta1 = beta1
