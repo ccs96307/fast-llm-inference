@@ -13,6 +13,7 @@ I'm excited to dive deeper into AI research!
 - **2024/11/10**: Initial setup for `Self-Speculative Decoding` completed; data pipeline in place for testing draft-and-verify.
 - **2024/11/12**: Reviewing implementation challenges for `Self-Speculative Decoding` and evaluating model compatibility for improved efficiency.
 - **2024/11/18**: Update the `Self-Speculative Decoding` experiment results of `google--gemma-2-9b-it`.
+- **2024/11/22**: Update the `Target Model Keep Generation Mechanism` experiment
 
 ### Pending Decisions
 - **Prompt lookup decoding**: Determine timeline after reviewing initial implementations.
@@ -32,8 +33,9 @@ I'm excited to dive deeper into AI research!
   - [x] Bayesian Optimization for Layer Skip Selection (Speed) 
   - [x] `gemma-2-9b-it` experiment
 - [ ] **2024/11/22** | Develop `Kangaroo` following [Kangaroo - Lossless Self-Speculative Decoding via Double Early Exiting](https://arxiv.org/pdf/2404.18911)
-  - [ ] Implement double early exits to improve speed.
+  - [ ] Kangaroo model
   - [ ] Training Script
+  - [ ] Implement double early exits to improve speed.
 - [ ] **2024/11/29** | Implement `Medusa` from [Medusa - Simple LLM Inference Acceleration Framework with Multiple Decoding Heads](https://arxiv.org/pdf/2401.10774)
 
 ### Additional Enhancements
