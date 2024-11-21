@@ -237,8 +237,12 @@ def run_test(args) -> None:
         if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
             break
 
-    print(f"Generate token number: {outputs['input_ids'].shape[1] - raw_token_num}")
-    print(f"Speculative Decoding Spent Time: {time.time() - start_time} seconds.")
+    generate_token_num = outputs["input_ids"].shape[1] - raw_token_num
+    spent_time = time.time() - start_time
+
+    print(f"Generate token number: {generate_token_num}")
+    print(f"Generate speed: {generate_token_num / spent_time} tokens/sec")
+    print(f"Speculative Decoding Spent Time: {spent_time} seconds.")
     print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
 
     # Normal Target Model Speed
@@ -251,8 +255,11 @@ def run_test(args) -> None:
         gamma=args.test_token_num,
     )
 
-    print(f"Generate token number: {args.test_token_num}")
-    print(f"Normal Target Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
+    spent_time = time.time() - start_time
+
+    print(f"Generate token number: {max_new_tokens}")
+    print(f"Generate speed: {max_new_tokens / spent_time} tokens/sec")
+    print(f"Normal Target Model Decoding Spent Time: {spent_time} seconds.\n")
 
     # Normal Draft Model Speed
     raw_inputs = copy.deepcopy(inputs)
@@ -264,8 +271,11 @@ def run_test(args) -> None:
         gamma=args.test_token_num,
     )
 
-    print(f"Generate token number: {args.test_token_num}")
-    print(f"Normal Draft Model Decoding Spent Time: {time.time() - start_time} seconds.\n")
+    spent_time = time.time() - start_time
+
+    print(f"Generate token number: {max_new_tokens}")
+    print(f"Generate speed: {max_new_tokens / spent_time} tokens/sec")
+    print(f"Normal Draft Model Decoding Spent Time: {spent_time} seconds.\n")
 
 
 if __name__ == "__main__":

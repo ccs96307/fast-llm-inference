@@ -10,11 +10,30 @@ import time
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from transformers import AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
 
-from layerskip_modeling.modeling_layerskip_gemma2 import LayerSkipGemma2ForCausalLM
 from sampling.sampling import sample_next_token
-from utils.utils import calculate_continuous_acceptance, AdaptiveDraftExitAduster
+
+
+"""
+python speculative_decoding/run_speculative_decoding.py \
+    --target_model_path HuggingFaceTB/SmolLM2-1.7B-Instruct \
+    --draft_model_path HuggingFaceTB/SmolLM2-135M-Instruct \
+    --device cuda:0 \
+    --question 'What is the capital of Taiwan. And why?' \
+    --gamma 5 \
+    --test_token_num 100 
+"""
+
+
+def calculate_continuous_acceptance(acceptance_mask: torch.BoolTensor) -> int:
+    continuous_acceptance = 0
+    for accepted in acceptance_mask.long().squeeze(0):
+        if accepted == 1:
+            continuous_acceptance += 1
+        else:
+            break
+    return continuous_acceptance
 
 
 def drafter_speculative_decode(
@@ -26,12 +45,8 @@ def drafter_speculative_decode(
     top_k: Optional[int] = 0,  # Default is 0, it means do not select top-k tokens
     top_p: Optional[float] = 1.0,
     repetition_penalty: Optional[float] = 1.0,
-    draft_mode: bool = True,
-    confidence_threshold_adjuster: Optional[AdaptiveDraftExitAduster] = None,
 ) -> Tuple[Dict[str, torch.Tensor], torch.FloatTensor]:
-    draft_model.set_draft_mode(draft_mode)
     draft_probs = []
-    real_generated_tokens = 0
 
     for idx in range(gamma):
         with torch.no_grad():
@@ -53,16 +68,7 @@ def drafter_speculative_decode(
         inputs["input_ids"] = input_ids
         inputs["attention_mask"] = attention_mask
 
-        real_generated_tokens += 1
-
-        # Early exit
-        if confidence_threshold_adjuster and confidence_threshold_adjuster.should_exit(draft_prob=probs[0, 0, next_tokens.item()]):
-            print(confidence_threshold_adjuster.get_state())
-            break
-
-    draft_model.set_draft_mode(False)
-
-    return inputs, torch.cat(draft_probs, dim=1), real_generated_tokens
+    return inputs, torch.cat(draft_probs, dim=1)
 
 
 def target_speculative_decode(
@@ -75,7 +81,6 @@ def target_speculative_decode(
     top_p: Optional[float] = 1.0,
     repetition_penalty: Optional[float] = 1.0,
 ) -> Tuple[Dict[str, torch.Tensor], bool, int]:
-    target_model.set_draft_mode(False)
     with torch.no_grad():
         outputs = target_model(**inputs)
 
@@ -121,9 +126,13 @@ def target_speculative_decode(
     is_end = False
 
     # Concat `input_ids`
+    confidence_score = 0
+
     if torch.all(acceptance_mask):
         input_ids = torch.cat([inputs["input_ids"], next_token], dim=-1)
         attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device)], dim=-1)
+        confidence_score = target_probs[:, -1, next_token[0][0]].item()
+        print(f"Confidence for next token: {confidence_score:.4f}")
     else:
         new_input_ids = []
         new_attention_mask = []
@@ -135,6 +144,8 @@ def target_speculative_decode(
             for pos_idx in range(acceptance_mask[batch_idx].shape[0]):
                 if (acceptance_mask[batch_idx][pos_idx] and inputs["input_ids"][batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id) or not acceptance_mask[batch_idx][pos_idx]:
                     inputs["input_ids"][batch_idx][start_idx+pos_idx] = next_tokens[batch_idx][pos_idx]
+                    confidence_score = target_probs[batch_idx, pos_idx, next_tokens[batch_idx, pos_idx]].max().item()
+                    print(f"Replacement Confidence for next token: {confidence_score:.4f}")
 
                     new_input_ids.append(inputs["input_ids"][batch_idx][:start_idx+pos_idx+1])
                     new_attention_mask.append(inputs["attention_mask"][batch_idx][:start_idx+pos_idx+1])
@@ -148,43 +159,68 @@ def target_speculative_decode(
     inputs["input_ids"] = input_ids
     inputs["attention_mask"] = attention_mask
 
+    # Keep generating if confidence_score is less than confidence threshold
+    while confidence_score < 0.5:
+        with torch.no_grad():
+            outputs = target_model(**inputs)
+
+        next_tokens, target_probs = sample_next_token(
+            logits=outputs.logits,
+            prefix_token_ids=inputs["input_ids"],
+            temperature=temperature,
+            top_k=top_k,
+            top_p=top_p,
+            repetition_penalty=repetition_penalty,
+            probs_num=1,
+        )
+
+        # Update `confidence_score`
+        next_token = next_tokens[:, -1:]
+        confidence_score = target_probs[0, -1, next_token[0][0]].item()
+        print(f"keep generate confidence_score: {confidence_score:.4f}")
+
+        input_ids = torch.cat([inputs["input_ids"], next_token], dim=-1)
+        attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device)], dim=-1)
+
+        inputs["input_ids"] = input_ids
+        inputs["attention_mask"] = attention_mask
+
+        is_end = inputs["input_ids"][0][-1].item() == target_tokenizer.eos_token_id
+        if is_end:
+            break
+
     return inputs, is_end, calculate_continuous_acceptance(acceptance_mask)
 
 
-if __name__ == "__main__":
-    pretrained_model_name_or_path = "../models/google--gemma-2-2b-it/"
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print(f"Device: {device}")
+def run_test(args) -> None:
+    # Device
+    device = torch.device(args.device if args.device != "cpu" and torch.cuda.is_available() else "cpu")
+    print(device)
 
-    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
-    model = LayerSkipGemma2ForCausalLM.from_pretrained(pretrained_model_name_or_path, torch_dtype=torch.bfloat16).to(device)
+    # Model path 
+    target_model_path = args.target_model_path
+    draft_model_path = args.draft_model_path
 
-    confidence_threshold_adjuster = AdaptiveDraftExitAduster(
-        target_matchness=0.5,
-        beta1=0.5,
-        beta2=0.9,
-        epsilon=0.01,
-        max_step_draft=8,
-    )
+    # Load Tokenizer
+    draft_tokenizer = AutoTokenizer.from_pretrained(draft_model_path)
+    target_tokenizer = AutoTokenizer.from_pretrained(target_model_path)
 
-    skip_layer_ids = {
-        "attn": [2, 15, 18],
-        "mlp": [2, 15, 18],
-    }
+    # Load Model
+    draft_model = AutoModelForCausalLM.from_pretrained(draft_model_path, torch_dtype=torch.bfloat16).to(device)
+    target_model = AutoModelForCausalLM.from_pretrained(target_model_path, torch_dtype=torch.bfloat16).to(device)
 
-    model.set_skip_layer_ids(skip_layer_ids=skip_layer_ids)
-
+    # Tokenize
     messages = [
         [
             {
                 "role": "user",
-                "content": "What is the capital of Taiwan. And why?",
+                "content": args.question,
             },
         ],
     ]
 
-    input_text=tokenizer.apply_chat_template(messages, tokenize=False)
-    inputs = tokenizer(
+    input_text=draft_tokenizer.apply_chat_template(messages, tokenize=False)
+    inputs = draft_tokenizer(
         input_text,
         return_tensors="pt",
         max_length=512,
@@ -195,7 +231,8 @@ if __name__ == "__main__":
     # Warm up the model (CUDA)
     inputs_dummy = {k: v.clone() for k, v in inputs.items()}
     with torch.no_grad():
-        model(**inputs_dummy)
+        draft_model(**inputs_dummy)
+        target_model(**inputs_dummy)
     torch.cuda.synchronize()
 
     is_end = False
@@ -207,43 +244,36 @@ if __name__ == "__main__":
 
     total_draft_tokens = 0
     total_accept_tokens = 0
-    gamma = 5
-    max_new_tokens = 100
+    gamma = args.gamma
+    max_new_tokens = args.test_token_num
 
     while not is_end:
         # Draft model
-        target_inputs, draft_probs, real_generated_tokens = drafter_speculative_decode(
-            draft_model=model,
-            draft_tokenizer=tokenizer,
-            inputs=raw_inputs,
+        target_inputs, draft_probs = drafter_speculative_decode(
+            draft_model=draft_model,
+            draft_tokenizer=draft_tokenizer,
+            inputs=inputs,
             gamma=gamma,
-            confidence_threshold_adjuster=confidence_threshold_adjuster,
         )
 
-        total_draft_tokens += real_generated_tokens        
+        total_draft_tokens += gamma
 
         # Target model
         outputs, is_end, accept_tokens = target_speculative_decode(
-            target_model=model,
-            target_tokenizer=tokenizer,
+            target_model=target_model,
+            target_tokenizer=target_tokenizer,
             inputs=target_inputs,
             draft_probs=draft_probs,
         )
 
-        # Update exit threshold
-        confidence_threshold_adjuster.update(
-            num_matched_tokens=accept_tokens,
-            num_drafted_tokens=real_generated_tokens,
-        )
-
         total_accept_tokens += accept_tokens
-        raw_inputs = outputs
 
-        if outputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
+        inputs = outputs
+
+        if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
             break
 
     generate_token_num = outputs["input_ids"].shape[1] - raw_token_num
-
     spent_time = time.time() - start_time
 
     print(f"Generate token number: {generate_token_num}")
@@ -254,12 +284,11 @@ if __name__ == "__main__":
     # Normal Target Model Speed
     raw_inputs = copy.deepcopy(inputs)
     start_time = time.time()
-    outputs, draft_probs, _ = drafter_speculative_decode(
-        draft_model=model,
-        draft_tokenizer=tokenizer,
+    target_inputs, draft_probs = drafter_speculative_decode(
+        draft_model=target_model,
+        draft_tokenizer=draft_tokenizer,
         inputs=raw_inputs,
-        gamma=max_new_tokens,
-        draft_mode=False,
+        gamma=args.test_token_num,
     )
 
     spent_time = time.time() - start_time
@@ -271,16 +300,28 @@ if __name__ == "__main__":
     # Normal Draft Model Speed
     raw_inputs = copy.deepcopy(inputs)
     start_time = time.time()
-    outputs, draft_probs, _ = drafter_speculative_decode(
-        draft_model=model,
-        draft_tokenizer=tokenizer,
+    target_inputs, draft_probs = drafter_speculative_decode(
+        draft_model=draft_model,
+        draft_tokenizer=draft_tokenizer,
         inputs=raw_inputs,
-        gamma=max_new_tokens,
-        draft_mode=True,
+        gamma=args.test_token_num,
     )
 
     spent_time = time.time() - start_time
 
     print(f"Generate token number: {max_new_tokens}")
-    print(f"Generate speed: {max_new_tokens / spent_time} token/sec")
+    print(f"Generate speed: {max_new_tokens / spent_time} tokens/sec")
     print(f"Normal Draft Model Decoding Spent Time: {spent_time} seconds.\n")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target_model_path", type=str, default="HuggingFaceTB/SmolLM2-1.7B-Instruct")
+    parser.add_argument("--draft_model_path", type=str, default="HuggingFaceTB/SmolLM2-135M-Instruct")
+    parser.add_argument("--device", type=str, default="cpu")
+    parser.add_argument("--question", type=str, default="What is the capital of Taiwan. And why?")
+    parser.add_argument("--gamma", type=int, default=5)
+    parser.add_argument("--test_token_num", type=int, default=100)
+    args = parser.parse_args()
+
+    run_test(args)
