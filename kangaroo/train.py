@@ -6,6 +6,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset, DataLoader
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from sklearn.model_selection import train_test_split
+
 from kangaroo_modeling.modeling_kangaroo_llama3 import KangarooLlamaForCausalLM
 
 
@@ -51,11 +53,10 @@ def main() -> None:
     # Load dataset
     dataset = load_dataset("shibing624/sharegpt_gpt4")
     
-    train_samples = dataset["train"]["conversations"][:4000]
-    train_samples = [[{"role": sample[0]["from"].replace("human", "user").replace("gpt", "assistant"), "content": sample[0]["value"]}] for sample in train_samples]
+    samples = dataset["train"]["conversations"]
+    samples = [[{"role": sample[0]["from"].replace("human", "user").replace("gpt", "assistant"), "content": sample[0]["value"]}] for sample in samples]
 
-    eval_samples = dataset["train"]["conversations"][4000:4500]
-    eval_samples = [[{"role": sample[0]["from"].replace("human", "user").replace("gpt", "assistant"), "content": sample[0]["value"]}] for sample in eval_samples]
+    train_samples, eval_samples = train_test_split(samples, test_size=0.1, random_state=2999)
 
     # Tokenized
     train_inputs = tokenizer(
@@ -78,8 +79,8 @@ def main() -> None:
     eval_dataset = CustomDataset(inputs=eval_inputs, device=device)
 
     # Dataloader
-    train_dataloader = DataLoader(train_dataset)
-    eval_dataloader = DataLoader(eval_dataset)
+    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=batch_size, shuffle=False)
 
     # Optimizer
     optimizer = torch.optim.AdamW(model.draft_mode_adapter_layer.parameters(), lr=lr)
