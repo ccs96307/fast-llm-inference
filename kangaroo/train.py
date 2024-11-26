@@ -122,7 +122,7 @@ def main() -> None:
                 eval_loss += outputs.loss.item()
 
                 avg_loss = eval_loss / batch_idx
-                print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(train_dataloader)}], Training Loss: {avg_loss:.4f}")
+                print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(eval_dataloader)}], Eval Loss: {avg_loss:.4f}")
 
         # Save model checkpoint
         model.save_adapter(f"./checkpoints/epoch_{epoch+1}")

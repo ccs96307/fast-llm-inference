@@ -331,12 +331,12 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
             draft_logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
             target_logits = self.lm_head(remaining_hidden_states[:, -num_logits_to_keep:, :])
 
-            # Calculate the log-probabilities of target model and draft model
-            target_log_probs = torch.nn.functional.log_softmax(target_logits, dim=-1)
-            draft_probs = torch.nn.functional.softmax(draft_logits, dim=-1)
+            # Compute the log probabilities for both models
+            draft_log_probs = torch.nn.functional.log_softmax(draft_logits, dim=-1)
+            target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
 
             # Cross-entropy loss between target and draft model predictions
-            loss = -(draft_probs * target_log_probs).sum(dim=-1).mean()
+            loss = -(target_probs * draft_log_probs).sum(dim=-1).mean()
 
             return CausalLMOutputWithPast(
                 loss=loss,
