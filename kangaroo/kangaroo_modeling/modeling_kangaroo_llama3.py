@@ -1,5 +1,6 @@
 from typing import Any, List, Optional, Tuple, Union
 
+import os
 from dataclasses import dataclass
 
 import torch
@@ -38,6 +39,21 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
 
     def set_acceleration_mode(self) -> None:
         self.mode = KangarooModelMode.accelerate_mode
+
+    def save_adapter(self, save_directory: str) -> None:
+        """
+        Save the parameters of the draft_mode_adapter_layer to the specified directory.
+
+        Args:
+            save_directory (str): Directory to save the adapter parameters.
+        """
+        if not os.path.exists(save_directory):
+            os.makedirs(save_directory)
+        
+        # Save the adapter's state dictionary
+        adapter_path = os.path.join(save_directory, "draft_adapter.pt")
+        torch.save(self.draft_mode_adapter_layer.state_dict(), adapter_path)
+        print(f"Draft adapter saved at {adapter_path}")
 
     def forward(
         self,

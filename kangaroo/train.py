@@ -125,9 +125,8 @@ def main() -> None:
                 print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(train_dataloader)}], Training Loss: {avg_loss:.4f}")
 
         # Save model checkpoint
-        checkpoint_path = f"./checkpoints/kangaroo_model_epoch_{epoch + 1}.pt"
-        torch.save(model.state_dict(), checkpoint_path)
-        print(f"Model checkpoint saved at {checkpoint_path}")
+        model.save_adapter(f"./checkpoints/epoch_{epoch+1}")
+        print(f"Adapter checkpoint saved at ./checkpoints/epoch_{epoch+1}/")
 
 
 if __name__ == "__main__":
