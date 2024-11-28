@@ -108,6 +108,11 @@ def target_speculative_decode(
     selected_eval_probs = torch.gather(eval_probs, dim=-1, index=expanded_indices)
     selected_eval_probs = selected_eval_probs.squeeze(-1)
 
+    print(f"expanded_indices: {expanded_indices.shape}")
+    print(f"eval_probs: {eval_probs.shape}")
+    print(f"selected_eval_probs: {selected_eval_probs.shape}")
+    
+
     # Compare draft_prob and eval_prob, and check the reject_mask
     mask_to_reject = selected_draft_probs > selected_eval_probs
 

@@ -57,6 +57,7 @@ def main() -> None:
     samples = [[{"role": sample[0]["from"].replace("human", "user").replace("gpt", "assistant"), "content": sample[0]["value"]}] for sample in samples]
 
     train_samples, eval_samples = train_test_split(samples, test_size=0.1, random_state=2999)
+    print(len(samples))
 
     # Tokenized
     train_inputs = tokenizer(
@@ -65,7 +66,7 @@ def main() -> None:
         padding=True,
         truncation=True,
         max_length=512,
-    ).to(device)    
+    ).to(device)
 
     eval_inputs = tokenizer(
         [tokenizer.apply_chat_template(messages, tokenize=False) for messages in eval_samples],
@@ -73,7 +74,7 @@ def main() -> None:
         padding=True,
         truncation=True,
         max_length=512,
-    ).to(device)    
+    ).to(device)
 
     train_dataset = CustomDataset(inputs=train_inputs, device=device)
     eval_dataset = CustomDataset(inputs=eval_inputs, device=device)
