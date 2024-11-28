@@ -51,19 +51,20 @@ def drafter_speculative_decode(
 
 def run_test() -> None:
     # Device
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
 
     # Model path 
-    pretrained_model_name_or_path = "../models/HuggingFaceTB--SmolLM2-135M-Instruct"
-    adapter_dir = None
+    pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3.1-8B-Instruct"
+    adapter_dir = "checkpoints/epoch_5/"
 
     # Load Tokenizer
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
+    tokenizer.pad_token = tokenizer.eos_token
 
     # Load Model
     model = KangarooLlamaForCausalLM.from_pretrained(pretrained_model_name_or_path, torch_dtype=torch.bfloat16).to(device)
-    model.set_skip_layer(shallow_layer_num=25)
+    model.set_skip_layer(shallow_layer_num=10)
     if adapter_dir:
         model.load_adapter(adapter_dir)
 

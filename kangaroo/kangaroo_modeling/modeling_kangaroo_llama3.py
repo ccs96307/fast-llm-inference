@@ -6,6 +6,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
 from dataclasses import dataclass
+import json
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
@@ -13,7 +14,8 @@ from transformers import LlamaForCausalLM
 from transformers.models.llama.modeling_llama import Cache, DynamicCache, LlamaSdpaAttention
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from sampling.sampling import sample_next_token 
+from sampling.sampling import sample_next_token
+from utils.utils import calculate_continuous_acceptance
 
 
 @dataclass
@@ -30,6 +32,11 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
         self.shallow_layers = None
         self.mode = KangarooModelMode.target_only_mode
         self.confidence_threshold = 0.5
+        self.accept_rate = 0
+        self.total_accept_tokens = 0
+        self.total_draft_generated_token = 0
+        self.temperature = 2.0
+        self.alpha = 1.0
     
     def set_skip_layer(self, shallow_layer_num: int) -> None:
         self.shallow_layers = self.model.layers[:shallow_layer_num]
@@ -44,12 +51,14 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
     def set_train_mode(self) -> None:
         self.mode = KangarooModelMode.train_mode
 
-    def set_acceleration_mode(self) -> None:
-        self.mode = KangarooModelMode.accelerate_mode
-
-    def save_adapter(self, save_dir: str) -> None:
+    def save_adapter(
+        self,
+        save_dir: str,
+        train_loss_history: List[float],
+        eval_loss_history: List[float],
+    ) -> None:
         """
-        Save the parameters of the draft_mode_adapter_layer to the specified directory.
+        Save the parameters of the draft_mode_adapter_layer, loss_history, and shallow_layer_num to the specified directory.
 
         Args:
             save_dir (str): Directory to save the adapter parameters.
@@ -62,9 +71,20 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
         torch.save(self.draft_mode_adapter_layer.state_dict(), adapter_path)
         print(f"Draft adapter saved at {adapter_path}")
 
+        # Save additional information (loss_history and shallow_layer_num)
+        metadata = {
+            "train_loss_history": train_loss_history,
+            "eval_loss_history": eval_loss_history,
+            "shallow_layer_num": self.shallow_layer_num
+        }
+        metadata_path = os.path.join(save_dir, "adapter_metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f)
+        print(f"Adapter metadata saved at {metadata_path}")
+
     def load_adapter(self, load_dir: str) -> None:
         """
-        Load the parameters of the draft_mode_adapter_layer from the specified directory.
+        Load the parameters of the draft_mode_adapter_layer, loss_history, and shallow_layer_num from the specified directory.
 
         Args:
             load_dir (str): Directory to load the adapter parameters from.
@@ -76,7 +96,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
         if not os.path.exists(adapter_path):
             raise FileNotFoundError(f"Draft adapter not found at {adapter_path}")
         
-        # Load the adapter's state directory
+        # Load the adapter's state dictionary
         state_dict = torch.load(adapter_path, map_location=self.device)
         self.draft_mode_adapter_layer.load_state_dict(state_dict=state_dict)
         print(f"Draft adapter loaded from {adapter_path}")
@@ -356,15 +376,17 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
             remaining_hidden_states = self.model.norm(remaining_hidden_states)
 
             # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-            draft_logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
-            target_logits = self.lm_head(remaining_hidden_states[:, -num_logits_to_keep:, :])
+            draft_logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :]) / self.temperature
+            target_logits = self.lm_head(remaining_hidden_states[:, -num_logits_to_keep:, :]) / self.temperature
 
             # Compute the log probabilities for both models
             draft_log_probs = torch.nn.functional.log_softmax(draft_logits, dim=-1)
             target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
 
             # Cross-entropy loss between target and draft model predictions
-            loss = -(target_probs * draft_log_probs).sum(dim=-1).mean()
+            kl_loss = torch.nn.functional.kl_div(draft_log_probs, target_probs, reduction="batchmean") * (self.temperature ** 2)
+            cross_entropy_loss = -(target_probs * draft_log_probs).sum(dim=-1).mean()
+            loss = self.alpha * cross_entropy_loss + (1 - self.alpha) * kl_loss
 
             return CausalLMOutputWithPast(
                 loss=loss,
@@ -513,6 +535,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
                 attention_mask = torch.cat([attention_mask, torch.ones(attention_mask.shape[0], 1).to(input_ids.device)], dim=-1)
 
                 draft_generate_tokens += 1
+                self.total_draft_generated_token += 1
 
                 # Re-init
                 inputs_embeds = None
@@ -608,6 +631,9 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
 
                 input_ids = pad_sequence(new_input_ids, batch_first=True, padding_value=pad_token_id)
                 attention_mask = pad_sequence(new_attention_mask, batch_first=True, padding_value=0)
+
+            self.total_accept_tokens += calculate_continuous_acceptance(acceptance_mask=acceptance_mask)
+            self.accept_rate = self.total_accept_tokens / self.total_draft_generated_token
         
             if is_end:
                 break
