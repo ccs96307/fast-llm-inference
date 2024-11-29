@@ -22,7 +22,7 @@ python speculative_decoding/run_speculative_decoding.py \
     --device cuda:0 \
     --question 'What is the capital of Taiwan. And why?' \
     --gamma 5 \
-    --test_token_num 100 
+    --test_token_num 100
 """
 
 
@@ -108,9 +108,9 @@ def target_speculative_decode(
     selected_eval_probs = torch.gather(eval_probs, dim=-1, index=expanded_indices)
     selected_eval_probs = selected_eval_probs.squeeze(-1)
 
-    print(f"expanded_indices: {expanded_indices.shape}")
-    print(f"eval_probs: {eval_probs.shape}")
-    print(f"selected_eval_probs: {selected_eval_probs.shape}")
+    # print(f"expanded_indices: {expanded_indices.shape}")
+    # print(f"eval_probs: {eval_probs.shape}")
+    # print(f"selected_eval_probs: {selected_eval_probs.shape}")
     
 
     # Compare draft_prob and eval_prob, and check the reject_mask
