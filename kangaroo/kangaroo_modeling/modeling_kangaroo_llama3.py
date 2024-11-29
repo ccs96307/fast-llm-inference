@@ -35,10 +35,12 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
         self.accept_rate = 0
         self.total_accept_tokens = 0
         self.total_draft_generated_token = 0
-        self.temperature = 2.0
-        self.alpha = 1.0
+        self.temperature = 1.0
+        self.alpha = 0
+        self.shallow_layer_num = 10
     
     def set_skip_layer(self, shallow_layer_num: int) -> None:
+        self.shallow_layer_num = shallow_layer_num
         self.shallow_layers = self.model.layers[:shallow_layer_num]
         self.remaining_layers = self.model.layers[shallow_layer_num:]
 
@@ -381,6 +383,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
 
             # Compute the log probabilities for both models
             draft_log_probs = torch.nn.functional.log_softmax(draft_logits, dim=-1)
+            target_log_probs = torch.nn.functional.log_softmax(target_logits, dim=-1)
             target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
 
             # Cross-entropy loss between target and draft model predictions
