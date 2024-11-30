@@ -34,10 +34,10 @@ I'm excited to dive deeper into AI research!
   - [x] Optimization
   - [x] Bayesian Optimization for Layer Skip Selection (Speed) 
   - [x] `gemma-2-9b-it` experiment
-- [ ] **2024/11/22** | Develop `Kangaroo` following [Kangaroo - Lossless Self-Speculative Decoding via Double Early Exiting](https://arxiv.org/pdf/2404.18911)
+- [x] **2024/11/22** | Develop `Kangaroo` following [Kangaroo - Lossless Self-Speculative Decoding via Double Early Exiting](https://arxiv.org/pdf/2404.18911)
   - [x] Kangaroo model
   - [x] Training Script
-  - [ ] Implement double early exits to improve speed.
+  - [x] Implement double early exits to improve speed.
 - [ ] **2024/11/29** | Implement `Medusa` from [Medusa - Simple LLM Inference Acceleration Framework with Multiple Decoding Heads](https://arxiv.org/pdf/2401.10774)
 
 ### Additional Enhancements
