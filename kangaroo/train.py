@@ -1,5 +1,6 @@
 from typing import Dict, List
 
+import os
 from datasets import load_dataset
 
 import pandas as pd
@@ -147,12 +148,14 @@ def main() -> None:
                 print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(eval_dataloader)}], Eval Loss: {avg_loss:.4f}")
 
         # Save model checkpoint
+        save_dir = "./checkpoints_ce_decoder_layer_20241203/"
+        save_path = os.path.join(save_dir, f"epoch_{epoch+1}")
         model.save_adapter(
-            f"./checkpoints_kl_decoder_layer_20241130/epoch_{epoch+1}",
+            save_path,
             train_loss_history=train_loss_history,
             eval_loss_history=eval_loss_history,
         )
-        print(f"Adapter checkpoint saved at ./checkpoints_kl_decode_layer_20241130/epoch_{epoch+1}/")
+        print(f"Adapter checkpoint saved at {save_path}")
 
 
 if __name__ == "__main__":

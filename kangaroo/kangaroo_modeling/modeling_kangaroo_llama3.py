@@ -48,7 +48,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
         self.total_accept_tokens = 0
         self.total_draft_generated_token = 0
         self.temperature = 1.0
-        self.alpha = 0
+        self.alpha = 1
         self.shallow_layer_num = 10
     
     def set_skip_layer(self, shallow_layer_num: int) -> None:
@@ -568,38 +568,43 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
                 if return_legacy_cache:
                     next_cache = next_cache.to_legacy_cache()
 
-            if self.adapter_layer_mode == AdapterMode.attention_only_mode:
-                hidden_states, all_self_attns, past_key_values = self.draft_mode_adapter_layer(
-                    hidden_states=hidden_states,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    past_key_values=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                    cache_position=cache_position,
-                    position_embeddings=position_embeddings,
-                )
-                hidden_states = residual + hidden_states
-                hidden_states = self.model.norm(hidden_states)
+                if self.adapter_layer_mode == AdapterMode.attention_only_mode:
+                    hidden_states, all_self_attns, past_key_values = self.draft_mode_adapter_layer(
+                        hidden_states=hidden_states,
+                        attention_mask=attention_mask,
+                        position_ids=position_ids,
+                        past_key_values=past_key_values,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                        cache_position=cache_position,
+                        position_embeddings=position_embeddings,
+                    )
+                    hidden_states = residual + hidden_states
+                    hidden_states = self.model.norm(hidden_states)
 
-            elif self.adapter_layer_mode == AdapterMode.decoder_layer_mode:
-                layer_outputs = self.draft_mode_adapter_layer(
-                    hidden_states,
-                    attention_mask=causal_mask,
-                    position_ids=position_ids,
-                    past_key_value=past_key_values,
-                    output_attentions=output_attentions,
-                    use_cache=use_cache,
-                    cache_position=cache_position,
-                    position_embeddings=position_embeddings,
-                )
-                hidden_states = layer_outputs[0]
+                elif self.adapter_layer_mode == AdapterMode.decoder_layer_mode:
+                    layer_outputs = self.draft_mode_adapter_layer(
+                        hidden_states,
+                        attention_mask=causal_mask,
+                        position_ids=position_ids,
+                        past_key_value=past_key_values,
+                        output_attentions=output_attentions,
+                        use_cache=use_cache,
+                        cache_position=cache_position,
+                        position_embeddings=position_embeddings,
+                    )
+                    hidden_states = layer_outputs[0]
 
-                if use_cache:
-                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+                    if use_cache:
+                        next_decoder_cache = layer_outputs[2 if output_attentions else 1]
 
-                if output_attentions:
-                    all_self_attns += (layer_outputs[1],)
+                    if output_attentions:
+                        all_self_attns += (layer_outputs[1],)
+
+                # Re-init
+                inputs_embeds = None
+                position_ids = None
+                cache_position = None
 
                 # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
                 draft_logits = self.lm_head(hidden_states[:, -1:, :])
@@ -616,11 +621,6 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
 
                 draft_generate_tokens += 1
                 self.total_draft_generated_token += 1
-
-                # Re-init
-                inputs_embeds = None
-                position_ids = None
-                cache_position = None
 
                 # Support bs=1
                 decode_token_id = next_tokens[:, -1].item()
