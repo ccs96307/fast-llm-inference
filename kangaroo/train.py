@@ -33,17 +33,21 @@ def main() -> None:
     max_length = 512
     lr = 5e-5
     shallow_layer_num = 2
+    adapter_mode = "decoder_layer"
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     # Load model and tokenizer
     pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3.1-8B-Instruct"
     # pretrained_model_name_or_path = "../models/HuggingFaceTB--SmolLM2-1.7B-Instruct"
-    model = KangarooLlamaForCausalLM.from_pretrained(pretrained_model_name_or_path, torch_dtype=torch.bfloat16).to(device)
+    model = KangarooLlamaForCausalLM.from_pretrained(pretrained_model_name_or_path, torch_dtype=torch.bfloat16)
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 
     model.set_skip_layer(shallow_layer_num=shallow_layer_num)
+    model.set_adapter_layer(_mode=adapter_mode)
     model.set_train_mode()
+
+    model = model.to(device)
 
     # Freeze all parameters
     for param in model.parameters():
@@ -144,11 +148,11 @@ def main() -> None:
 
         # Save model checkpoint
         model.save_adapter(
-            f"./checkpoints_kl_20241129/epoch_{epoch+1}",
+            f"./checkpoints_kl_decoder_layer_20241130/epoch_{epoch+1}",
             train_loss_history=train_loss_history,
             eval_loss_history=eval_loss_history,
         )
-        print(f"Adapter checkpoint saved at ./checkpoints_kl_20241129/epoch_{epoch+1}/")
+        print(f"Adapter checkpoint saved at ./checkpoints_kl_decode_layer_20241130/epoch_{epoch+1}/")
 
 
 if __name__ == "__main__":

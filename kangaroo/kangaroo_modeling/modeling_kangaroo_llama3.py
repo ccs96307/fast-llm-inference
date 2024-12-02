@@ -9,9 +9,11 @@ from dataclasses import dataclass
 import json
 
 import torch
+torch.set_default_dtype(torch.bfloat16)
+
 from torch.nn.utils.rnn import pad_sequence
 from transformers import LlamaForCausalLM
-from transformers.models.llama.modeling_llama import Cache, DynamicCache, LlamaSdpaAttention
+from transformers.models.llama.modeling_llama import Cache, DynamicCache, LlamaSdpaAttention, LlamaDecoderLayer
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from sampling.sampling import sample_next_token
@@ -25,10 +27,20 @@ class KangarooModelMode:
     train_mode: str = "train"
 
 
+@dataclass
+class AdapterMode:
+    attention_only_mode: str = "attention_only"
+    mlp_only_mode: str = "mlp_only"
+    decoder_layer_mode: str = "decoder_layer"
+
+
 class KangarooLlamaForCausalLM(LlamaForCausalLM):
     def __init__(self, config):
         super().__init__(config)
-        self.draft_mode_adapter_layer = LlamaSdpaAttention(config=config, layer_idx=config.num_hidden_layers)
+        self.config = config
+
+        self.adapter_layer_mode = None
+        self.draft_mode_adapter_layer = None
         self.shallow_layers = None
         self.mode = KangarooModelMode.target_only_mode
         self.confidence_threshold = 0.5
@@ -43,6 +55,20 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
         self.shallow_layer_num = shallow_layer_num
         self.shallow_layers = self.model.layers[:shallow_layer_num]
         self.remaining_layers = self.model.layers[shallow_layer_num:]
+
+    def set_adapter_layer(self, _mode: str) -> None:
+        self.adapter_layer_mode = _mode
+
+        if _mode == AdapterMode.attention_only_mode:
+            self.draft_mode_adapter_layer = LlamaSdpaAttention(
+                config=self.config,
+                layer_idx=self.config.num_hidden_layers,
+            )
+        elif _mode == AdapterMode.decoder_layer_mode:
+            self.draft_mode_adapter_layer = LlamaDecoderLayer(
+                config=self.config,
+                layer_idx=self.config.num_hidden_layers,
+            )
 
     def set_draft_mode(self) -> None:
         self.mode = KangarooModelMode.draft_only_mode
@@ -220,19 +246,32 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
             if return_legacy_cache:
                 next_cache = next_cache.to_legacy_cache()
 
-            hidden_states, self_attn_weights, past_key_values = self.draft_mode_adapter_layer(
-                hidden_states=hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-                cache_position=cache_position,
-                position_embeddings=position_embeddings,
-            )
+            if self.adapter_layer_mode == AdapterMode.attention_only_mode:
+                hidden_states, all_self_attns, past_key_values = self.draft_mode_adapter_layer(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                )
+                hidden_states = residual + hidden_states
+                hidden_states = self.model.norm(hidden_states)
 
-            hidden_states = residual + hidden_states
-            hidden_states = self.model.norm(hidden_states)
+            elif self.adapter_layer_mode == AdapterMode.decoder_layer_mode:
+                layer_outputs = self.draft_mode_adapter_layer(
+                    hidden_states,
+                    attention_mask=causal_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                )
+                hidden_states = layer_outputs[0]
 
             if self.config.pretraining_tp > 1:
                 lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
@@ -251,7 +290,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
                 logits=logits,
                 past_key_values=past_key_values,
                 hidden_states=hidden_states,
-                attentions=self_attn_weights,
+                attentions=all_self_attns,
             )
         elif self.mode == KangarooModelMode.train_mode:
             output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
@@ -337,19 +376,38 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
             if return_legacy_cache:
                 next_cache = next_cache.to_legacy_cache()
 
-            hidden_states, self_attn_weights, past_key_values = self.draft_mode_adapter_layer(
-                hidden_states=hidden_states,
-                attention_mask=causal_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-                cache_position=cache_position,
-                position_embeddings=position_embeddings,
-            )
+            if self.adapter_layer_mode == AdapterMode.attention_only_mode:
+                hidden_states, all_self_attns, past_key_values = self.draft_mode_adapter_layer(
+                    hidden_states=hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_values=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                )
+                hidden_states = residual + hidden_states
+                hidden_states = self.model.norm(hidden_states)
 
-            hidden_states = residual + hidden_states
-            hidden_states = self.model.norm(hidden_states)
+            elif self.adapter_layer_mode == AdapterMode.decoder_layer_mode:
+                layer_outputs = self.draft_mode_adapter_layer(
+                    hidden_states,
+                    attention_mask=causal_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                )
+                hidden_states = layer_outputs[0]
+
+                if use_cache:
+                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+
+                if output_attentions:
+                    all_self_attns += (layer_outputs[1],)
 
             # Remaining decoder layers
             for decoder_layer in self.remaining_layers:
@@ -387,7 +445,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
             target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
 
             # Cross-entropy loss between target and draft model predictions
-            kl_loss = torch.nn.functional.kl_div(draft_log_probs, target_probs, reduction="batchmean") * (self.temperature ** 2)
+            kl_loss = torch.nn.functional.kl_div(draft_log_probs, target_probs, reduction="batchmean")
             cross_entropy_loss = -(target_probs * draft_log_probs).sum(dim=-1).mean()
             loss = self.alpha * cross_entropy_loss + (1 - self.alpha) * kl_loss
 
@@ -396,7 +454,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
                 logits=target_logits,
                 past_key_values=past_key_values,
                 hidden_states=hidden_states,
-                attentions=self_attn_weights,
+                attentions=all_self_attns,
             )
 
     def kangaroo_generate(
@@ -510,9 +568,10 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
                 if return_legacy_cache:
                     next_cache = next_cache.to_legacy_cache()
 
-                hidden_states, self_attn_weights, past_key_values = self.draft_mode_adapter_layer(
+            if self.adapter_layer_mode == AdapterMode.attention_only_mode:
+                hidden_states, all_self_attns, past_key_values = self.draft_mode_adapter_layer(
                     hidden_states=hidden_states,
-                    attention_mask=causal_mask,
+                    attention_mask=attention_mask,
                     position_ids=position_ids,
                     past_key_values=past_key_values,
                     output_attentions=output_attentions,
@@ -520,9 +579,27 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
                     cache_position=cache_position,
                     position_embeddings=position_embeddings,
                 )
-
                 hidden_states = residual + hidden_states
                 hidden_states = self.model.norm(hidden_states)
+
+            elif self.adapter_layer_mode == AdapterMode.decoder_layer_mode:
+                layer_outputs = self.draft_mode_adapter_layer(
+                    hidden_states,
+                    attention_mask=causal_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_values,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                )
+                hidden_states = layer_outputs[0]
+
+                if use_cache:
+                    next_decoder_cache = layer_outputs[2 if output_attentions else 1]
+
+                if output_attentions:
+                    all_self_attns += (layer_outputs[1],)
 
                 # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
                 draft_logits = self.lm_head(hidden_states[:, -1:, :])
