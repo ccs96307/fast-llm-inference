@@ -86,6 +86,7 @@ def target_speculative_decode(
 
     next_tokens, target_probs = sample_next_token(
         logits=outputs.logits,
+        diff_probs=draft_probs,
         prefix_token_ids=inputs["input_ids"],
         temperature=temperature,
         top_k=top_k,
@@ -106,12 +107,7 @@ def target_speculative_decode(
     selected_draft_probs = selected_draft_probs.squeeze(-1)
 
     selected_eval_probs = torch.gather(eval_probs, dim=-1, index=expanded_indices)
-    selected_eval_probs = selected_eval_probs.squeeze(-1)
-
-    # print(f"expanded_indices: {expanded_indices.shape}")
-    # print(f"eval_probs: {eval_probs.shape}")
-    # print(f"selected_eval_probs: {selected_eval_probs.shape}")
-    
+    selected_eval_probs = selected_eval_probs.squeeze(-1)    
 
     # Compare draft_prob and eval_prob, and check the reject_mask
     mask_to_reject = selected_draft_probs > selected_eval_probs
@@ -164,7 +160,7 @@ def target_speculative_decode(
 def run_test(args) -> None:
     # Device
     device = torch.device(args.device if args.device != "cpu" and torch.cuda.is_available() else "cpu")
-    print(device)
+    print(f"Device: {device}")
 
     # Model path 
     target_model_path = args.target_model_path
@@ -223,6 +219,7 @@ def run_test(args) -> None:
             draft_tokenizer=draft_tokenizer,
             inputs=inputs,
             gamma=gamma,
+            temperature=0,
         )
 
         total_draft_tokens += gamma
@@ -233,6 +230,7 @@ def run_test(args) -> None:
             target_tokenizer=target_tokenizer,
             inputs=target_inputs,
             draft_probs=draft_probs,
+            temperature=0,
         )
 
         total_accept_tokens += accept_tokens
@@ -245,34 +243,39 @@ def run_test(args) -> None:
     generate_token_num = outputs["input_ids"].shape[1] - raw_token_num
     spent_time = time.time() - start_time
 
+    print(draft_tokenizer.batch_decode(outputs["input_ids"])[0])
+
     print(f"Generate token number: {generate_token_num}")
     print(f"Generate speed: {generate_token_num / spent_time} tokens/sec")
     print(f"Speculative Decoding Spent Time: {spent_time} seconds.")
     print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
 
     # Normal Target Model Speed
-    raw_inputs = copy.deepcopy(inputs)
+    inputs = copy.deepcopy(raw_inputs)
     start_time = time.time()
     target_inputs, draft_probs = drafter_speculative_decode(
         draft_model=target_model,
         draft_tokenizer=draft_tokenizer,
-        inputs=raw_inputs,
+        inputs=inputs,
         gamma=args.test_token_num,
+        temperature=0,
     )
 
     spent_time = time.time() - start_time
+
+    print(draft_tokenizer.batch_decode(target_inputs["input_ids"])[0])
 
     print(f"Generate token number: {max_new_tokens}")
     print(f"Generate speed: {max_new_tokens / spent_time} tokens/sec")
     print(f"Normal Target Model Decoding Spent Time: {spent_time} seconds.\n")
 
     # Normal Draft Model Speed
-    raw_inputs = copy.deepcopy(inputs)
+    inputs = copy.deepcopy(raw_inputs)
     start_time = time.time()
     target_inputs, draft_probs = drafter_speculative_decode(
         draft_model=draft_model,
         draft_tokenizer=draft_tokenizer,
-        inputs=raw_inputs,
+        inputs=inputs,
         gamma=args.test_token_num,
     )
 

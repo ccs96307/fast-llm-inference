@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Optional, Tuple
 
 import warnings
 warnings.simplefilter(action="ignore", category=FutureWarning)
@@ -60,13 +60,14 @@ def top_p_filtering(logits: torch.Tensor, top_p: float) -> torch.Tensor:
 def sample_next_token(
     logits: torch.FloatTensor,
     prefix_token_ids: torch.LongTensor,
+    diff_probs: Optional[torch.FloatTensor] = None,
     temperature: float = 1.0,
     top_k: int = 0,
     top_p: float = 1.0,
     repetition_penalty: float = 1.0,
-    eps: float = 1e-7,
+    eps: float = 1e-10,
     probs_num: int = 1,
-) -> Tuple[torch.FloatTensor, torch.FloatTensor]:
+) -> Tuple[torch.FloatTensor, torch.FloatTensor, Optional[torch.FloatTensor]]:
     curr_logits = logits[:, -probs_num:, :]
 
     # Apply repetition penalty
@@ -89,10 +90,20 @@ def sample_next_token(
     # Convert logits into probs
     probs = torch.softmax(curr_logits, dim=-1)
 
-    # Sampling
+    # If we need to resample the probabilities
+    resampled_probs = probs
+    if diff_probs is not None:
+        batch_size, seq_len, vocab_size = diff_probs.shape
+        padding = torch.zeros(batch_size, 1, vocab_size).to(diff_probs.device)
+        padded_diff_probs = torch.cat((diff_probs, padding), dim=1)
+
+        resampled_probs = torch.maximum((probs + eps) - padded_diff_probs, torch.tensor(0, device=probs.device))
+        resampled_probs = resampled_probs / (resampled_probs.sum(dim=-1, keepdim=True))
+
+    # Re-sampling
     seq_tokens = []
-    for seq_idx in range(probs.shape[1]):
-        seq_token = torch.multinomial(probs[:, seq_idx, :], num_samples=1)
+    for seq_idx in range(resampled_probs.shape[1]):
+        seq_token = torch.multinomial(resampled_probs[:, seq_idx, :], num_samples=1)
         seq_tokens.append(seq_token)
 
     seq_token_ids = torch.cat(seq_tokens, dim=1)
