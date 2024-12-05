@@ -150,7 +150,7 @@ def main() -> None:
                 print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(eval_dataloader)}], Eval Loss: {avg_loss:.4f}")
 
         # Save model checkpoint
-        save_dir = "./checkpoints_ce_decoder_layer_20241203/"
+        save_dir = "./checkpoints/checkpoints_hce_decoder_layer_20241205/"
         save_path = os.path.join(save_dir, f"epoch_{epoch+1}")
         model.save_adapter(
             save_path,

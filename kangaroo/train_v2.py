@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple
 import argparse
 import os
 from dataclasses import dataclass
+from datetime import datetime
 import glob
 import json
 
@@ -66,6 +67,8 @@ class KangarooPartialModel(torch.nn.Module):
         self.adapter_mode = adapter_mode
 
         if self.adapter_mode == AdapterMode.attention_only_mode:
+            self.attn_input_norm = LlamaRMSNorm(self.config.hidden_size, eps=self.config.rms_norm_eps)
+            self.attn_output_norm = LlamaRMSNorm(self.config.hidden_size, eps=self.config.rms_norm_eps)
             self.adapter = LlamaSdpaAttention(
                 config=self.config,
                 layer_idx=self.config.num_hidden_layers,
@@ -114,6 +117,15 @@ class KangarooPartialModel(torch.nn.Module):
         torch.save(self.adapter.state_dict(), adapter_path)
         print(f"Draft adapter saved at {adapter_path}")
 
+        if self.adapter_mode == AdapterMode.attention_only_mode:
+            adapter_path = os.path.join(save_dir, "input_norm.pt")
+            torch.save(self.attn_input_norm.state_dict(), adapter_path)
+            print(f"Draft attn_input_norm saved at {adapter_path}")
+
+            adapter_path = os.path.join(save_dir, "output_norm.pt")
+            torch.save(self.attn_output_norm.state_dict(), adapter_path)
+            print(f"Draft attn_output_norm saved at {adapter_path}")
+
         # Save additional information (loss_history and shallow_layer_num)
         metadata = {
             "train_loss_history": train_loss_history,
@@ -142,12 +154,14 @@ class KangarooPartialModel(torch.nn.Module):
 
         if self.adapter_mode == AdapterMode.attention_only_mode:
             residual = shallow_hidden_states
+            shallow_hidden_states = self.attn_input_norm(shallow_hidden_states)
             
             hidden_states, _, _ = self.adapter(
                 hidden_states=shallow_hidden_states,
                 position_ids=position_ids,
             )
             hidden_states = residual + shallow_hidden_states
+            shallow_hidden_states = self.attn_output_norm(shallow_hidden_states)
 
         elif self.adapter_mode == AdapterMode.decoder_layer_mode:
             layer_outputs = self.adapter(
@@ -155,8 +169,7 @@ class KangarooPartialModel(torch.nn.Module):
                 position_ids=position_ids,
             )
             hidden_states = layer_outputs[0]
-
-        hidden_states = self.norm(hidden_states)
+            hidden_states = self.norm(hidden_states)
 
         # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
         draft_logits = self.lm_head(hidden_states) / self.draft_temperature
@@ -190,7 +203,7 @@ def train(args) -> None:
     data_dir = args.data_dir
     epochs = args.epochs
     batch_size = args.batch_size
-    lr = args.lr
+    lr = args.learning_rate
 
     # Load model
     model = KangarooPartialModel(
@@ -300,7 +313,7 @@ if __name__ == "__main__":
     parser.add_argument("--lm_head_file", type=str, default="/mnt/kangaroo_train_data/llama-3.1-8b_train_data/lm_head.pt", help="Path to the lm_head file")
     parser.add_argument("--norm_file", type=str, default="/mnt/kangaroo_train_data/llama-3.1-8b_train_data/norm.pt", help="Path to the norm file")
     parser.add_argument("--data_dir", type=str, default="/mnt/kangaroo_train_data/llama-3.1-8b_train_data/", help="Path to the training data directory")
-    parser.add_argument("--save_dir", type=str, default="./checkpoints/checkpoints_ce_decoder_layer_20241204/", help="Path to save the checkpoints")
+    parser.add_argument("--save_dir", type=str, default=f"./checkpoints/checkpoints_ce_decoder_layer_{datetime.now().strftime('%Y%m%d')}/", help="Path to save the checkpoints")
     parser.add_argument("--alpha", type=float, default=0.8, help="Alpha for soft-hard loss ratio")
     parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate for the optimizer")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
