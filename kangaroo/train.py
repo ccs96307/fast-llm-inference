@@ -1,6 +1,8 @@
 from typing import Dict, List
 
 import os
+from dataclasses import dataclass
+
 from datasets import load_dataset
 
 import pandas as pd
@@ -75,7 +77,7 @@ def main() -> None:
         padding=True,
         truncation=True,
         max_length=max_length,
-    ).to(device)
+    )
 
     eval_inputs = tokenizer(
         [tokenizer.apply_chat_template(messages, tokenize=False) for messages in eval_samples],
@@ -83,7 +85,7 @@ def main() -> None:
         padding=True,
         truncation=True,
         max_length=max_length,
-    ).to(device)
+    )
 
     train_dataset = CustomDataset(inputs=train_inputs, device=device)
     eval_dataset = CustomDataset(inputs=eval_inputs, device=device)
