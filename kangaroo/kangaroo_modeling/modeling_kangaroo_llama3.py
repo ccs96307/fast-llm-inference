@@ -505,7 +505,7 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
 
                 hidden_states, all_self_attns, past_key_values = self.draft_mode_adapter_layer(
                     hidden_states=hidden_states,
-                    attention_mask=attention_mask,
+                    attention_mask=causal_mask,
                     position_ids=position_ids,
                     past_key_values=past_key_values,
                     output_attentions=output_attentions,

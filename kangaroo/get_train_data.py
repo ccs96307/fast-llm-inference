@@ -75,7 +75,7 @@ def get_all_train_data(args) -> None:
             shallow_hidden_states, target_hidden_states = model.prepare_dataset(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                num_logits_to_keep=args.max_length,
+                # num_logits_to_keep=args.max_length,
             )
 
             shallow_hidden_states = shallow_hidden_states.clone().detach().cpu()
@@ -84,6 +84,7 @@ def get_all_train_data(args) -> None:
         # Save
         torch.save(shallow_hidden_states, os.path.join(args.output_dir, f"shallow_{batch_idx}.pt"))
         torch.save(target_hidden_states, os.path.join(args.output_dir, f"target_{batch_idx}.pt"))
+        print(f"data id {batch_idx} is saved.")
 
     # Save lm_head
     model.save_head(save_dir=args.output_dir)

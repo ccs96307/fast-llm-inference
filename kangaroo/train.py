@@ -36,7 +36,7 @@ def main() -> None:
     max_length = 512
     lr = 5e-5
     shallow_layer_num = 2
-    adapter_mode = "decoder_layer"
+    adapter_mode = "attention_only"
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     # Load model and tokenizer
@@ -60,6 +60,15 @@ def main() -> None:
     model.draft_mode_adapter_layer.train()
     for param in model.draft_mode_adapter_layer.parameters():
         param.requires_grad = True
+
+    if hasattr(model, "attn_input_norm"):
+        print("Attention-Adapter!")
+        
+        for param in model.attn_input_norm.parameters():
+            param.requires_grad = True
+
+        for param in model.attn_output_norm.parameters():
+            param.requires_grad = True
 
     # Load dataset
     dataset = load_dataset("shibing624/sharegpt_gpt4")
@@ -150,7 +159,7 @@ def main() -> None:
                 print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(eval_dataloader)}], Eval Loss: {avg_loss:.4f}")
 
         # Save model checkpoint
-        save_dir = "./checkpoints/checkpoints_hce_decoder_layer_20241205/"
+        save_dir = "./checkpoints/checkpoints_hce_attn_20241209/"
         save_path = os.path.join(save_dir, f"epoch_{epoch+1}")
         model.save_adapter(
             save_path,
