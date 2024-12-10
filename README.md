@@ -9,6 +9,7 @@ I'm excited to dive deeper into AI research!
 
 ## Updates Log
 ### November 2024
+- **2024/12/04**: Add the `Kangaroo Training Script v2`
 - **2024/11/26**: Add the `Kangaroo Training Script`
 - **2024/11/22**: Update the `Target Model Keep Generation Mechanism` experiment
 - **2024/11/18**: Update the `Self-Speculative Decoding` experiment results of `google--gemma-2-9b-it`.
@@ -16,15 +17,14 @@ I'm excited to dive deeper into AI research!
 - **2024/11/10**: Initial setup for `Self-Speculative Decoding` completed; data pipeline in place for testing draft-and-verify.
 - **2024/11/08**: `Speculative Decoding` successfully implemented. Verified improved inference time with no noticeable accuracy degradation.
 
-
 ### Pending Decisions
+- **Batched Speculative Decoding**: 
 - **Prompt lookup decoding**: Determine timeline after reviewing initial implementations.
 - **UAG Integration**: Assess when to integrate after `Medusa` and `Kangaroo` are in place.
 
 ---
 
 ## TODO List
-
 ### November 2024
 - [x] **2024/11/08** | Complete `Speculative Decoding` following the paper [Fast Inference from Transformers via Speculative Decoding](https://arxiv.org/pdf/2211.17192)
 - [x] **2024/11/15** | Implement `Self-Speculative Decoding` as per [Draft & Verify - Lossless Large Language Model Acceleration via Self-Speculative Decoding](https://arxiv.org/pdf/2309.08168)
@@ -39,8 +39,11 @@ I'm excited to dive deeper into AI research!
   - [x] Training Script
   - [x] Implement double early exits to improve speed.
 - [ ] **2024/11/29** | Implement `Medusa` from [Medusa - Simple LLM Inference Acceleration Framework with Multiple Decoding Heads](https://arxiv.org/pdf/2401.10774)
+- [ ] **2024/12/20** | Implement `Eagle` from
+
 
 ### Additional Enhancements
-- [ ] **TBD** | Implement `prompt lookup decoding` per [prompt-lookup-decoding GitHub](https://github.com/apoorvumang/prompt-lookup-decoding)
-- [ ] **TBD** | Implement `UAG` (Universal Assisted Generation) as per [Universal Assisted Generation Blog](https://huggingface.co/blog/universal_assisted_generation)
+- [ ] **TBD** | Implement `Batched Speculative Decoding` from [The Synergy of Speculative Decoding and Batching in Serving Large Language Models](https://arxiv.org/pdf/2310.18813)
+- [ ] **TBD** | Implement `prompt lookup decoding` from [prompt-lookup-decoding GitHub](https://github.com/apoorvumang/prompt-lookup-decoding)
+- [ ] **TBD** | Implement `UAG` (Universal Assisted Generation) from [Universal Assisted Generation Blog](https://huggingface.co/blog/universal_assisted_generation)
 

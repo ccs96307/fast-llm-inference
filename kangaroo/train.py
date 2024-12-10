@@ -1,6 +1,8 @@
 from typing import Dict, List
 
 import os
+from dataclasses import dataclass
+
 from datasets import load_dataset
 
 import pandas as pd
@@ -34,7 +36,7 @@ def main() -> None:
     max_length = 512
     lr = 5e-5
     shallow_layer_num = 2
-    adapter_mode = "decoder_layer"
+    adapter_mode = "attention_only"
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
     # Load model and tokenizer
@@ -59,6 +61,15 @@ def main() -> None:
     for param in model.draft_mode_adapter_layer.parameters():
         param.requires_grad = True
 
+    if hasattr(model, "attn_input_norm"):
+        print("Attention-Adapter!")
+        
+        for param in model.attn_input_norm.parameters():
+            param.requires_grad = True
+
+        for param in model.attn_output_norm.parameters():
+            param.requires_grad = True
+
     # Load dataset
     dataset = load_dataset("shibing624/sharegpt_gpt4")
     
@@ -75,7 +86,7 @@ def main() -> None:
         padding=True,
         truncation=True,
         max_length=max_length,
-    ).to(device)
+    )
 
     eval_inputs = tokenizer(
         [tokenizer.apply_chat_template(messages, tokenize=False) for messages in eval_samples],
@@ -83,7 +94,7 @@ def main() -> None:
         padding=True,
         truncation=True,
         max_length=max_length,
-    ).to(device)
+    )
 
     train_dataset = CustomDataset(inputs=train_inputs, device=device)
     eval_dataset = CustomDataset(inputs=eval_inputs, device=device)
@@ -148,7 +159,7 @@ def main() -> None:
                 print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(eval_dataloader)}], Eval Loss: {avg_loss:.4f}")
 
         # Save model checkpoint
-        save_dir = "./checkpoints_ce_decoder_layer_20241203/"
+        save_dir = "./checkpoints/checkpoints_hce_attn_20241209/"
         save_path = os.path.join(save_dir, f"epoch_{epoch+1}")
         model.save_adapter(
             save_path,
