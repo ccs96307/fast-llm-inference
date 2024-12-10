@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import os
 import sys
@@ -10,7 +10,7 @@ import time
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from transformers import AutoModelForCausalLM, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, Cache, PreTrainedTokenizerBase
 
 from sampling.sampling import sample_next_token
 
@@ -45,12 +45,23 @@ def drafter_speculative_decode(
     top_k: Optional[int] = 0,  # Default is 0, it means do not select top-k tokens
     top_p: Optional[float] = 1.0,
     repetition_penalty: Optional[float] = 1.0,
-) -> Tuple[Dict[str, torch.Tensor], torch.FloatTensor]:
+    past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
+) -> Tuple[Dict[str, torch.Tensor], torch.FloatTensor, Optional[Union[Cache, List[torch.FloatTensor]]]]:
     draft_probs = []
 
-    for idx in range(gamma):
+    # if past_key_values is None:
+    #     past_key_values = Cache.init_empty(draft_model.config)
+    #     print(past_key_values)
+
+    for idx in range(gamma):    
         with torch.no_grad():
-            outputs = draft_model(**inputs)
+            outputs = draft_model(
+                **inputs,
+                # past_key_values=past_key_values,
+                use_cache=True,
+            )
+
+        past_key_values = outputs.past_key_values
 
         next_tokens, probs = sample_next_token(
             logits=outputs.logits,
@@ -68,7 +79,7 @@ def drafter_speculative_decode(
         inputs["input_ids"] = input_ids
         inputs["attention_mask"] = attention_mask
 
-    return inputs, torch.cat(draft_probs, dim=1)
+    return inputs, torch.cat(draft_probs, dim=1), past_key_values
 
 
 def target_speculative_decode(
@@ -80,9 +91,17 @@ def target_speculative_decode(
     top_k: Optional[int] = 0,  # Default is 0, it means do not select top-k tokens
     top_p: Optional[float] = 1.0,
     repetition_penalty: Optional[float] = 1.0,
-) -> Tuple[Dict[str, torch.Tensor], bool, int]:
+    past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
+) -> Tuple[Dict[str, torch.Tensor], bool, int, Optional[Union[Cache, List[torch.FloatTensor]]]]:
     with torch.no_grad():
-        outputs = target_model(**inputs)
+        outputs = target_model(
+            **inputs,
+            # past_key_values = past_key_values,
+            use_cache=True,
+        )
+
+    past_key_values = outputs.past_key_values
+    # print(past_key_values[0][0].shape)
 
     next_tokens, target_probs = sample_next_token(
         logits=outputs.logits,
@@ -154,7 +173,7 @@ def target_speculative_decode(
     inputs["input_ids"] = input_ids
     inputs["attention_mask"] = attention_mask
 
-    return inputs, is_end, calculate_continuous_acceptance(acceptance_mask)
+    return inputs, is_end, calculate_continuous_acceptance(acceptance_mask), past_key_values
 
 
 def run_test(args) -> None:
@@ -212,25 +231,30 @@ def run_test(args) -> None:
     gamma = args.gamma
     max_new_tokens = args.test_token_num
 
+    draft_past_key_values = None
+    target_past_key_values = None
+
     while not is_end:
         # Draft model
-        target_inputs, draft_probs = drafter_speculative_decode(
+        target_inputs, draft_probs, draft_past_key_values = drafter_speculative_decode(
             draft_model=draft_model,
             draft_tokenizer=draft_tokenizer,
             inputs=inputs,
             gamma=gamma,
             temperature=0,
+            past_key_values=draft_past_key_values,
         )
 
         total_draft_tokens += gamma
 
         # Target model
-        outputs, is_end, accept_tokens = target_speculative_decode(
+        outputs, is_end, accept_tokens, target_past_key_values = target_speculative_decode(
             target_model=target_model,
             target_tokenizer=target_tokenizer,
             inputs=target_inputs,
             draft_probs=draft_probs,
             temperature=0,
+            past_key_values=target_past_key_values,
         )
 
         total_accept_tokens += accept_tokens
@@ -253,7 +277,7 @@ def run_test(args) -> None:
     # Normal Target Model Speed
     inputs = copy.deepcopy(raw_inputs)
     start_time = time.time()
-    target_inputs, draft_probs = drafter_speculative_decode(
+    target_inputs, draft_probs, _ = drafter_speculative_decode(
         draft_model=target_model,
         draft_tokenizer=draft_tokenizer,
         inputs=inputs,
