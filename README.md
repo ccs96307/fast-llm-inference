@@ -8,7 +8,8 @@ I'm excited to dive deeper into AI research!
 ---
 
 ## Updates Log
-### November 2024
+### 2024
+- **2024/12/12**: Update the KV Cache support for Speculative Decoding
 - **2024/12/04**: Add the `Kangaroo Training Script v2`
 - **2024/11/26**: Add the `Kangaroo Training Script`
 - **2024/11/22**: Update the `Target Model Keep Generation Mechanism` experiment
