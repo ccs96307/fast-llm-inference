@@ -10,7 +10,7 @@ import time
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-from transformers import AutoModelForCausalLM, AutoTokenizer, Cache, PreTrainedTokenizerBase
+from transformers import AutoModelForCausalLM, AutoTokenizer, Cache, DynamicCache, PreTrainedTokenizerBase
 
 from sampling.sampling import sample_next_token
 
@@ -49,15 +49,23 @@ def drafter_speculative_decode(
 ) -> Tuple[Dict[str, torch.Tensor], torch.FloatTensor, Optional[Union[Cache, List[torch.FloatTensor]]]]:
     draft_probs = []
 
-    # if past_key_values is None:
-    #     past_key_values = Cache.init_empty(draft_model.config)
-    #     print(past_key_values)
+    for idx in range(gamma):
+        raw_inputs_ids = inputs.input_ids
 
-    for idx in range(gamma):    
+        if past_key_values.get_seq_length() > 0:
+            distance = inputs.input_ids.shape[1] - past_key_values.get_seq_length()
+
+            if distance >= 1:
+                inputs.input_ids = inputs.input_ids[:, -distance:]
+            else:
+                past_key_values.crop(max_length=inputs.input_ids.shape[1]-1)
+                inputs.input_ids = inputs.input_ids[:, -1:]
+
         with torch.no_grad():
             outputs = draft_model(
-                **inputs,
-                # past_key_values=past_key_values,
+                input_ids=inputs.input_ids,
+                attention_mask=inputs.attention_mask,
+                past_key_values=past_key_values,
                 use_cache=True,
             )
 
@@ -65,7 +73,7 @@ def drafter_speculative_decode(
 
         next_tokens, probs = sample_next_token(
             logits=outputs.logits,
-            prefix_token_ids=inputs["input_ids"],
+            prefix_token_ids=inputs.input_ids,
             temperature=temperature,
             top_k=top_k,
             top_p=top_p,
@@ -73,11 +81,11 @@ def drafter_speculative_decode(
         )
 
         draft_probs.append(probs)
-        input_ids = torch.cat([inputs["input_ids"], next_tokens[:, -1:]], dim=-1)
-        attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device)], dim=-1)
+        input_ids = torch.cat([raw_inputs_ids, next_tokens[:, -1:]], dim=-1)
+        attention_mask = torch.cat([inputs.attention_mask, torch.ones(inputs.attention_mask.shape[0], 1).to(inputs.input_ids.device)], dim=-1)
 
-        inputs["input_ids"] = input_ids
-        inputs["attention_mask"] = attention_mask
+        inputs.input_ids = input_ids
+        inputs.attention_mask = attention_mask
 
     return inputs, torch.cat(draft_probs, dim=1), past_key_values
 
@@ -93,20 +101,31 @@ def target_speculative_decode(
     repetition_penalty: Optional[float] = 1.0,
     past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
 ) -> Tuple[Dict[str, torch.Tensor], bool, int, Optional[Union[Cache, List[torch.FloatTensor]]]]:
+    raw_inputs_ids = inputs.input_ids
+
+    if past_key_values.get_seq_length() > 0:
+        distance = inputs.input_ids.shape[1] - past_key_values.get_seq_length()
+        if distance >= 1:
+            inputs.input_ids = inputs.input_ids[:, -distance:]
+        else:
+            past_key_values.crop(max_length=inputs.input_ids.shape[1]-1)
+            inputs.input_ids = inputs.input_ids[:, -1:]
+
     with torch.no_grad():
         outputs = target_model(
-            **inputs,
-            # past_key_values = past_key_values,
+            input_ids=inputs.input_ids,
+            attention_mask=inputs.attention_mask,
+            past_key_values=past_key_values,
             use_cache=True,
         )
 
     past_key_values = outputs.past_key_values
-    # print(past_key_values[0][0].shape)
+    inputs.input_ids = raw_inputs_ids
 
     next_tokens, target_probs = sample_next_token(
         logits=outputs.logits,
         diff_probs=draft_probs,
-        prefix_token_ids=inputs["input_ids"],
+        prefix_token_ids=inputs.input_ids,
         temperature=temperature,
         top_k=top_k,
         top_p=top_p,
@@ -117,7 +136,7 @@ def target_speculative_decode(
     next_token = next_tokens[:, -1:]
 
     # Evaluation
-    indices = inputs["input_ids"][:, -draft_probs.shape[1]:]
+    indices = inputs.input_ids[:, -draft_probs.shape[1]:]
 
     eval_probs = target_probs[:, :-1, :]
 
@@ -147,31 +166,34 @@ def target_speculative_decode(
 
     # Concat `input_ids`
     if torch.all(acceptance_mask):
-        input_ids = torch.cat([inputs["input_ids"], next_token], dim=-1)
-        attention_mask = torch.cat([inputs["attention_mask"], torch.ones(inputs["attention_mask"].shape[0], 1).to(inputs["input_ids"].device)], dim=-1)
+        inputs.input_ids = torch.cat([inputs.input_ids, next_token], dim=-1)
+        inputs.attention_mask = torch.cat([inputs.attention_mask, torch.ones(inputs.attention_mask.shape[0], 1).to(inputs.input_ids.device)], dim=-1)
     else:
         new_input_ids = []
         new_attention_mask = []
 
         for batch_idx in range(next_tokens.shape[0]):
             gamma = next_tokens.shape[1] - 1
-            start_idx = inputs["input_ids"].shape[1] - gamma
+            start_idx = inputs.input_ids.shape[1] - gamma
 
             for pos_idx in range(acceptance_mask[batch_idx].shape[0]):
-                if (acceptance_mask[batch_idx][pos_idx] and inputs["input_ids"][batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id) or not acceptance_mask[batch_idx][pos_idx]:
-                    inputs["input_ids"][batch_idx][start_idx+pos_idx] = next_tokens[batch_idx][pos_idx]
+                if (acceptance_mask[batch_idx][pos_idx] and inputs.input_ids[batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id) or not acceptance_mask[batch_idx][pos_idx]:
+                    inputs.input_ids[batch_idx][start_idx+pos_idx] = next_tokens[batch_idx][pos_idx]
 
-                    new_input_ids.append(inputs["input_ids"][batch_idx][:start_idx+pos_idx+1])
-                    new_attention_mask.append(inputs["attention_mask"][batch_idx][:start_idx+pos_idx+1])
+                    new_input_ids.append(inputs.input_ids[batch_idx][:start_idx+pos_idx+1])
+                    new_attention_mask.append(inputs.attention_mask[batch_idx][:start_idx+pos_idx+1])
                     
-                    is_end = inputs["input_ids"][batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id
+                    is_end = inputs.input_ids[batch_idx][start_idx+pos_idx].item() == target_tokenizer.eos_token_id
                     break
 
         input_ids = pad_sequence(new_input_ids, batch_first=True, padding_value=target_tokenizer.pad_token_id)
         attention_mask = pad_sequence(new_attention_mask, batch_first=True, padding_value=0)
 
-    inputs["input_ids"] = input_ids
-    inputs["attention_mask"] = attention_mask
+        inputs.input_ids = input_ids
+        inputs.attention_mask = attention_mask
+
+    if inputs.input_ids.shape[1] <= past_key_values.get_seq_length():
+        past_key_values.crop(max_length=inputs.input_ids.shape[1]-1)
 
     return inputs, is_end, calculate_continuous_acceptance(acceptance_mask), past_key_values
 
@@ -223,7 +245,7 @@ def run_test(args) -> None:
 
     # Record
     raw_inputs = copy.deepcopy(inputs)
-    raw_token_num = raw_inputs["input_ids"].shape[1]
+    raw_token_num = raw_inputs.input_ids.shape[1]
     start_time = time.time()
 
     total_draft_tokens = 0
@@ -231,8 +253,8 @@ def run_test(args) -> None:
     gamma = args.gamma
     max_new_tokens = args.test_token_num
 
-    draft_past_key_values = None
-    target_past_key_values = None
+    draft_past_key_values = DynamicCache()
+    target_past_key_values = DynamicCache()
 
     while not is_end:
         # Draft model
@@ -261,13 +283,11 @@ def run_test(args) -> None:
 
         inputs = outputs
 
-        if inputs["input_ids"].shape[1] - raw_token_num >= max_new_tokens:
+        if inputs.input_ids.shape[1] - raw_token_num >= max_new_tokens:
             break
 
-    generate_token_num = outputs["input_ids"].shape[1] - raw_token_num
+    generate_token_num = outputs.input_ids.shape[1] - raw_token_num
     spent_time = time.time() - start_time
-
-    print(draft_tokenizer.batch_decode(outputs["input_ids"])[0])
 
     print(f"Generate token number: {generate_token_num}")
     print(f"Generate speed: {generate_token_num / spent_time} tokens/sec")
@@ -276,6 +296,7 @@ def run_test(args) -> None:
 
     # Normal Target Model Speed
     inputs = copy.deepcopy(raw_inputs)
+    past_key_values = DynamicCache()
     start_time = time.time()
     target_inputs, draft_probs, _ = drafter_speculative_decode(
         draft_model=target_model,
@@ -283,11 +304,12 @@ def run_test(args) -> None:
         inputs=inputs,
         gamma=args.test_token_num,
         temperature=0,
+        past_key_values=past_key_values,
     )
 
     spent_time = time.time() - start_time
 
-    print(draft_tokenizer.batch_decode(target_inputs["input_ids"])[0])
+    # print(draft_tokenizer.batch_decode(target_inputs.input_ids)[0])
 
     print(f"Generate token number: {max_new_tokens}")
     print(f"Generate speed: {max_new_tokens / spent_time} tokens/sec")
@@ -295,12 +317,14 @@ def run_test(args) -> None:
 
     # Normal Draft Model Speed
     inputs = copy.deepcopy(raw_inputs)
+    past_key_values = DynamicCache()
     start_time = time.time()
-    target_inputs, draft_probs = drafter_speculative_decode(
+    target_inputs, draft_probs, _ = drafter_speculative_decode(
         draft_model=draft_model,
         draft_tokenizer=draft_tokenizer,
         inputs=inputs,
         gamma=args.test_token_num,
+        past_key_values=past_key_values,
     )
 
     spent_time = time.time() - start_time
