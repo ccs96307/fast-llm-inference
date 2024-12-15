@@ -9,7 +9,9 @@ I'm excited to dive deeper into AI research!
 
 ## Updates Log
 ### 2024
+- **2024/12/15**: Add the `Medusa-1 Training Script`
 - **2024/12/12**: Update the KV Cache support for Speculative Decoding
+- **2024/12/15**: Add the `Medusa-1 Training Script`
 - **2024/12/04**: Add the `Kangaroo Training Script v2`
 - **2024/11/26**: Add the `Kangaroo Training Script`
 - **2024/11/22**: Update the `Target Model Keep Generation Mechanism` experiment
@@ -40,6 +42,9 @@ I'm excited to dive deeper into AI research!
   - [x] Training Script
   - [x] Implement double early exits to improve speed.
 - [ ] **2024/11/29** | Implement `Medusa` from [Medusa - Simple LLM Inference Acceleration Framework with Multiple Decoding Heads](https://arxiv.org/pdf/2401.10774)
+  - [X] Medusa model
+  - [X] Training Script (Medusa-1)
+  - [ ] Testing
 - [ ] **2024/12/20** | Implement `Eagle` from
 
 
