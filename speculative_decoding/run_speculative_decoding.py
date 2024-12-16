@@ -52,7 +52,7 @@ def drafter_speculative_decode(
     for idx in range(gamma):
         raw_inputs_ids = inputs.input_ids
 
-        if past_key_values.get_seq_length() > 0:
+        if isinstance(past_key_values, Cache) and past_key_values.get_seq_length() > 0:
             distance = inputs.input_ids.shape[1] - past_key_values.get_seq_length()
 
             if distance >= 1:
@@ -66,7 +66,7 @@ def drafter_speculative_decode(
                 input_ids=inputs.input_ids,
                 attention_mask=inputs.attention_mask,
                 past_key_values=past_key_values,
-                use_cache=True,
+                use_cache=past_key_values is not None,
             )
 
         past_key_values = outputs.past_key_values
@@ -103,7 +103,7 @@ def target_speculative_decode(
 ) -> Tuple[Dict[str, torch.Tensor], bool, int, Optional[Union[Cache, List[torch.FloatTensor]]]]:
     raw_inputs_ids = inputs.input_ids
 
-    if past_key_values.get_seq_length() > 0:
+    if isinstance(past_key_values, Cache) and past_key_values.get_seq_length() > 0:
         distance = inputs.input_ids.shape[1] - past_key_values.get_seq_length()
         if distance >= 1:
             inputs.input_ids = inputs.input_ids[:, -distance:]
@@ -116,7 +116,7 @@ def target_speculative_decode(
             input_ids=inputs.input_ids,
             attention_mask=inputs.attention_mask,
             past_key_values=past_key_values,
-            use_cache=True,
+            use_cache=past_key_values is not None,
         )
 
     past_key_values = outputs.past_key_values
@@ -192,7 +192,7 @@ def target_speculative_decode(
         inputs.input_ids = input_ids
         inputs.attention_mask = attention_mask
 
-    if inputs.input_ids.shape[1] <= past_key_values.get_seq_length():
+    if isinstance(past_key_values, Cache) and inputs.input_ids.shape[1] <= past_key_values.get_seq_length():
         past_key_values.crop(max_length=inputs.input_ids.shape[1]-1)
 
     return inputs, is_end, calculate_continuous_acceptance(acceptance_mask), past_key_values
@@ -255,6 +255,8 @@ def run_test(args) -> None:
 
     draft_past_key_values = DynamicCache()
     target_past_key_values = DynamicCache()
+    # draft_past_key_values = None
+    # target_past_key_values = None
 
     while not is_end:
         # Draft model

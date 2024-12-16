@@ -96,7 +96,6 @@ def sample_next_token(
         batch_size, seq_len, vocab_size = diff_probs.shape
         padding = torch.zeros(batch_size, 1, vocab_size).to(diff_probs.device)
         padded_diff_probs = torch.cat((diff_probs, padding), dim=1)
-
         resampled_probs = torch.maximum((probs + eps) - padded_diff_probs, torch.tensor(0, device=probs.device))
         resampled_probs = resampled_probs / (resampled_probs.sum(dim=-1, keepdim=True))
 
