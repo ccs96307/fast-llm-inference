@@ -1,4 +1,4 @@
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import os
 
@@ -31,13 +31,14 @@ def collate_fn(
     tokenizer: AutoTokenizer,
     device: torch.DeviceObjType,
     head_num: int,
+    max_length: int = 512,
 ) -> Tuple[torch.LongTensor, torch.LongTensor]:
     tokenized_batch = tokenizer(
         batch,
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=512,
+        max_length=max_length,
     ).to(device)
 
     # Head num padding
@@ -63,25 +64,39 @@ def collate_fn(
 def reshape_logits_with_offset(
     raw_logits: torch.FloatTensor,
     head_num: int,
-) -> torch.FloatTensor:
+    raw_attention_mask: torch.LongTensor = None,
+) -> Tuple[torch.FloatTensor, Optional[torch.LongTensor]]:
     raw_logits = raw_logits.squeeze(0)
-    batch_size, seq_len, vocab_size = raw_logits.shape
+    batch_size, seq_len_with_head_num_padding, vocab_size = raw_logits.shape
+    seq_len = seq_len_with_head_num_padding - head_num
 
     # Init null logits
-    updated_logits = torch.zeros((head_num, batch_size, seq_len-head_num, vocab_size), device=raw_logits.device)
+    updated_logits = torch.zeros((head_num, batch_size, seq_len, vocab_size), device=raw_logits.device)
 
-    # Offset (assume head_num=5)
-    # head_idx 0: [:, 1:seq_len-4, :]
-    # head_idx 1: [:, 2:seq_len-3, :]
-    # head_idx 2: [:, 3:seq_len-2, :]
-    # head_idx 3: [:, 4:seq_len-1, :]
-    # head_idx 4: [:, 5:seq_len, :]
+    # Init updated_attention_mask
+    updated_attention_mask = None
+    if raw_attention_mask is not None:
+        updated_attention_mask = torch.zeros(
+            (head_num, batch_size, seq_len),
+            device=raw_attention_mask.device,
+            dtype=raw_attention_mask.dtype,
+        )
+
+    # Offset (assume seq_len=512, seq_len_with_head_num_padding=517)
+    # head_idx 0: [:, 1:513, :]
+    # head_idx 1: [:, 2:514, :]
+    # head_idx 2: [:, 3:515, :]
+    # head_idx 3: [:, 4:516, :]
+    # head_idx 4: [:, 5:517, :]
     for head_idx in range(head_num):
         start_idx = head_idx + 1
-        end_idx = seq_len - head_num + head_idx + 1
+        end_idx = seq_len + head_idx + 1
         updated_logits[head_idx] = raw_logits[:, start_idx:end_idx, :]
 
-    return updated_logits
+        if raw_attention_mask is not None:
+            updated_attention_mask[head_idx] = raw_attention_mask[:, start_idx:end_idx]
+
+    return updated_logits, updated_attention_mask
     
 
 def main() -> None:
@@ -93,7 +108,8 @@ def main() -> None:
     lr = 5e-5
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
     alpha = 0.2
-    head_num = 5
+    head_num = 3
+    lambda_k = 0.8
 
     # Load model and tokenizer
     pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3.1-8B-Instruct"
@@ -103,7 +119,12 @@ def main() -> None:
 
     # Teacher model
     model = MedusaLlamaForCausalLM.from_pretrained(pretrained_model_name_or_path, torch_dtype=torch.bfloat16)
-    model.set_medusa_heads(head_num=head_num)
+    model.set_medusa_heads(
+        head_num=head_num,
+        use_lora=False,
+        use_low_rank_linear=True,
+        share_lm_head_weights=False,
+    )
     model.set_draft_mode()
     model = model.eval().to(device)
 
@@ -145,13 +166,13 @@ def main() -> None:
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        collate_fn=partial(collate_fn, tokenizer=tokenizer, device=device, head_num=head_num),
+        collate_fn=partial(collate_fn, tokenizer=tokenizer, device=device, head_num=head_num, max_length=max_length),
     )
     eval_dataloader = DataLoader(
         eval_dataset,
         batch_size=batch_size,
         shuffle=False,
-        collate_fn=partial(collate_fn, tokenizer=tokenizer, device=device, head_num=head_num),
+        collate_fn=partial(collate_fn, tokenizer=tokenizer, device=device, head_num=head_num, max_length=max_length),
     )
 
     # Optimizer
@@ -176,25 +197,47 @@ def main() -> None:
             )
 
             logits = outputs.logits
+
             raw_logits = logits[:1, ...]
             heads_logits = logits[1:, :, :-head_num, :]
 
             # Reshape and offset the raw_logits, and the shape must to satisfy the heads_logits
-            target_logits = reshape_logits_with_offset(raw_logits=raw_logits, head_num=head_num)
+            target_logits, target_attention_mask = reshape_logits_with_offset(
+                raw_logits=raw_logits,
+                head_num=head_num,
+                raw_attention_mask=attention_mask,
+            )
 
             # Compute the log probabilities for both models
             draft_log_probs = torch.nn.functional.log_softmax(heads_logits, dim=-1)
-            target_logits = torch.nn.functional.softmax(target_logits, dim=-1)
+            target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
 
-            # Cross-entropy loss between target and draft model predictions
-            # kl_loss = torch.nn.functional.kl_div(draft_log_probs, target_probs, reduction="batchmean")
-            hard_labels = torch.argmax(target_logits, dim=-1)
-            soft_label_cross_entropy_loss = -(target_logits * draft_log_probs).sum(dim=-1).mean()
-            hard_label_loss = torch.nn.functional.cross_entropy(
-                draft_log_probs.view(-1, draft_log_probs.size(-1)),  # Flatten logits
-                hard_labels.view(-1)  # Flatten hard labels
-            )
-            loss = alpha * soft_label_cross_entropy_loss + (1 - alpha) * hard_label_loss
+            loss = 0.0
+            for k in range(head_num):
+                curr_lambda_k = pow(lambda_k, k + 1)
+
+                # Extract the k-th head's logits
+                k_head_log_probs = draft_log_probs[k]  # Shape: (batch_size, seq_len, vocab_size)
+                k_target_probs = target_probs[k]
+
+                # Compute hard labels and soft labels cross entropy loss
+                hard_labels = torch.argmax(k_target_probs, dim=-1)
+                hard_label_loss = torch.nn.functional.cross_entropy(
+                    k_head_log_probs.view(-1, draft_log_probs.size(-1)),  # Flatten logits
+                    hard_labels.view(-1),  # Flatten hard labels
+                    ignore_index=tokenizer.pad_token_id,
+                )
+
+                # Mask padding token
+                valid_mask = target_attention_mask[k].bool()
+                masked_k_head_log_probs = k_head_log_probs[valid_mask]
+                masked_k_target_probs = k_target_probs[valid_mask]
+
+                soft_label_cross_entropy_loss = -(masked_k_target_probs * masked_k_head_log_probs).sum(dim=-1).mean()
+
+                # Combine soft and hard label loss
+                head_loss = alpha * soft_label_cross_entropy_loss + (1 - alpha) * hard_label_loss
+                loss += curr_lambda_k * head_loss
             
             # Accumulation
             loss = loss / accumulation_steps
@@ -235,21 +278,42 @@ def main() -> None:
                 heads_logits = logits[1:, :, :-head_num, :]
 
                 # Reshape and offset the raw_logits, and the shape must to satisfy the heads_logits
-                target_logits = reshape_logits_with_offset(raw_logits=raw_logits, head_num=head_num)
+                target_logits, target_attention_mask = reshape_logits_with_offset(
+                    raw_logits=raw_logits,
+                    head_num=head_num,
+                    raw_attention_mask=attention_mask,
+                )
 
                 # Compute the log probabilities for both models
                 draft_log_probs = torch.nn.functional.log_softmax(heads_logits, dim=-1)
-                target_logits = torch.nn.functional.softmax(target_logits, dim=-1)
+                target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
 
-                # Cross-entropy loss between target and draft model predictions
-                # kl_loss = torch.nn.functional.kl_div(draft_log_probs, target_probs, reduction="batchmean")
-                hard_labels = torch.argmax(target_logits, dim=-1)
-                soft_label_cross_entropy_loss = -(target_logits * draft_log_probs).sum(dim=-1).mean()
-                hard_label_loss = torch.nn.functional.cross_entropy(
-                    draft_log_probs.view(-1, draft_log_probs.size(-1)),  # Flatten logits
-                    hard_labels.view(-1)  # Flatten hard labels
-                )
-                loss = alpha * soft_label_cross_entropy_loss + (1 - alpha) * hard_label_loss
+                loss = 0.0
+                for k in range(head_num):
+                    curr_lambda_k = pow(lambda_k, k + 1)
+
+                    # Extract the k-th head's logits
+                    k_head_log_probs = draft_log_probs[k]  # Shape: (batch_size, seq_len, vocab_size)
+                    k_target_probs = target_probs[k]
+
+                    # Compute hard labels and soft labels cross entropy loss
+                    hard_labels = torch.argmax(k_target_probs, dim=-1)
+                    hard_label_loss = torch.nn.functional.cross_entropy(
+                        k_head_log_probs.view(-1, draft_log_probs.size(-1)),  # Flatten logits
+                        hard_labels.view(-1),  # Flatten hard labels
+                        ignore_index=tokenizer.pad_token_id,
+                    )
+
+                    # Mask padding token
+                    valid_mask = target_attention_mask[k].bool()
+                    masked_k_head_log_probs = k_head_log_probs[valid_mask]
+                    masked_k_target_probs = k_target_probs[valid_mask]
+
+                    soft_label_cross_entropy_loss = -(masked_k_target_probs * masked_k_head_log_probs).sum(dim=-1).mean()
+
+                    # Combine soft and hard label loss
+                    head_loss = alpha * soft_label_cross_entropy_loss + (1 - alpha) * hard_label_loss
+                    loss += curr_lambda_k * head_loss
 
                 eval_loss += loss.item()
                 eval_loss_history.append(loss.item())
@@ -258,7 +322,7 @@ def main() -> None:
                 print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(eval_dataloader)}], Eval Loss: {avg_loss:.4f}")
 
         # Save model checkpoint
-        save_dir = "./checkpoints/checkpoints_hce_20241215/"
+        save_dir = "./checkpoints/checkpoints_hce_linear_20241217/"
         save_path = os.path.join(save_dir, f"epoch_{epoch+1}")
         model.save_heads(
             save_path,
