@@ -70,18 +70,48 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         self,
         head_num: int = 5,
         torch_dtype: dtype = torch.bfloat16,
+        use_lora: bool = False,
+        use_low_rank_linear: bool = False,
+        share_lm_head_weights: bool = False,
     ) -> None:
         self.head_num = head_num
-        self.medusa_heads = torch.nn.ModuleList(
-            [
-                LoRALinear(
-                    base_linear=self.lm_head,
-                    r=8,
-                    torch_dtype=torch_dtype,
-                )
-                for _ in range(head_num)
+        if use_lora:
+            medusa_heads = [LoRALinear(base_linear=self.lm_head, r=64, torch_dtype=torch_dtype) for _ in range(head_num)]
+        elif use_low_rank_linear:
+            medusa_heads = [
+                torch.nn.Sequential(
+                    torch.nn.Linear(
+                        self.config.hidden_size,
+                        512,
+                        bias=False,
+                        dtype=torch_dtype,
+                    ),
+                    torch.nn.Linear(
+                        512,
+                        self.config.vocab_size,
+                        bias=False,
+                        dtype=torch_dtype,
+                    )
+                ) for _ in range(head_num)
             ]
-        )
+        else:
+            medusa_heads = [
+                torch.nn.Linear(
+                    self.config.hidden_size,
+                    self.config.vocab_size,
+                    bias=False,
+                    dtype=torch_dtype,
+                ) for _ in range(head_num)
+            ]
+
+        self.medusa_heads = torch.nn.ModuleList(medusa_heads)
+
+        if not use_lora and share_lm_head_weights:
+            with torch.no_grad():
+                for head in self.medusa_heads:
+                    head.weight.copy_(self.lm_head.weight.clone())
+                    if self.lm_head.bias is not None:
+                        head.bias.copy_(self.lm_head.bias.clone())
 
     def save_heads(
         self,
@@ -114,9 +144,9 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         with open(metadata_path, "w") as f:
             json.dump(metadata, f)
 
-        print(f"Adapter metadata saved at {metadata_path}")
+        print(f"Medusa metadata saved at {metadata_path}")
 
-    def load_adapter(self, load_dir: str) -> None:
+    def load_heads(self, load_dir: str) -> None:
         """
         Load the parameters of the medusa_heads, loss_history, and head_num from the specified directory.
 
@@ -133,7 +163,7 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         # Load the adapter's state dictionary
         state_dict = torch.load(heads_path, map_location=self.device)
         self.medusa_heads.load_state_dict(state_dict=state_dict)
-        print(f"Draft adapter loaded from {heads_path}")
+        print(f"Medusa heads loaded from {heads_path}")
 
     def set_draft_mode(self) -> None:
         self._mode = MedusaModelMode.draft_mode
@@ -158,23 +188,21 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
 
     def get_decoder(self):
         return self.model
-
-    def forward(
+    
+    def get_hidden_states(        
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: Optional[torch.Tensor] = None,
         position_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
         inputs_embeds: Optional[torch.FloatTensor] = None,
-        labels: Optional[torch.LongTensor] = None,
         use_cache: Optional[bool] = None,
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         cache_position: Optional[torch.LongTensor] = None,
-        num_logits_to_keep: int = 0,
         **loss_kwargs,
-    ) -> Union[Tuple, CausalLMOutputWithPast]:
+    ):
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -195,7 +223,39 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             cache_position=cache_position,
         )
 
+        return outputs
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor = None,
+        attention_mask: Optional[torch.Tensor] = None,
+        position_ids: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Union[Cache, List[torch.FloatTensor]]] = None,
+        inputs_embeds: Optional[torch.FloatTensor] = None,
+        labels: Optional[torch.LongTensor] = None,
+        use_cache: Optional[bool] = None,
+        output_attentions: Optional[bool] = None,
+        output_hidden_states: Optional[bool] = None,
+        return_dict: Optional[bool] = None,
+        cache_position: Optional[torch.LongTensor] = None,
+        num_logits_to_keep: int = 0,
+        **loss_kwargs,
+    ) -> Union[Tuple, CausalLMOutputWithPast]:
+        outputs = self.get_hidden_states(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            use_cache=use_cache,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+            cache_position=cache_position,
+        )
+
         hidden_states = outputs[0]
+
         if self.config.pretraining_tp > 1:
             lm_head_slices = self.lm_head.weight.split(self.vocab_size // self.config.pretraining_tp, dim=0)
             logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.config.pretraining_tp)]
@@ -213,10 +273,6 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         loss = None
         if labels is not None:
             loss = self.loss_function(logits=logits, labels=labels, vocab_size=self.config.vocab_size, **loss_kwargs)
-
-        if not return_dict:
-            output = (logits,) + outputs[1:]
-            return (loss,) + output if loss is not None else output
 
         return CausalLMOutputWithPast(
             loss=loss,
