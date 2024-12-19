@@ -47,6 +47,16 @@ class MedusaModelMode:
     target_mode: str = "target"
 
 
+class ResBlock(torch.nn.Module):
+    def __init__(self, hidden_size: int) -> None:
+        super().__init__()
+        self.fc = torch.nn.Linear(hidden_size, hidden_size, dtype=torch.bfloat16)
+        self.silu = torch.nn.SiLU()
+
+    def forward(self, hidden_states: torch.FloatTensor) -> None:
+        return hidden_states + self.silu(self.fc(hidden_states))
+
+
 class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
@@ -75,6 +85,8 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         share_lm_head_weights: bool = False,
     ) -> None:
         self.head_num = head_num
+        self.use_lora = use_lora
+
         if use_lora:
             medusa_heads = [LoRALinear(base_linear=self.lm_head, r=64, torch_dtype=torch_dtype) for _ in range(head_num)]
         elif use_low_rank_linear:
@@ -96,12 +108,16 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             ]
         else:
             medusa_heads = [
-                torch.nn.Linear(
-                    self.config.hidden_size,
-                    self.config.vocab_size,
-                    bias=False,
-                    dtype=torch_dtype,
-                ) for _ in range(head_num)
+                torch.nn.Sequential(
+                    *([ResBlock(hidden_size=self.config.hidden_size)] * 3),
+                    # torch.nn.Linear(
+                    #     self.config.hidden_size,
+                    #     self.config.vocab_size,
+                    #     bias=False,
+                    #     dtype=torch_dtype,
+                    # ),
+                )
+                for _ in range(head_num)
             ]
 
         self.medusa_heads = torch.nn.ModuleList(medusa_heads)
@@ -170,6 +186,9 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
 
     def set_target_mode(self) -> None:
         self._mode = MedusaModelMode.target_mode
+
+    def get_mode(self) -> str:
+        return self._mode
 
     def get_input_embeddings(self):
         return self.model.embed_tokens
@@ -266,7 +285,11 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
 
             if self._mode == MedusaModelMode.draft_mode:
                 logits = logits.unsqueeze(0)
-                medusa_head_logits = [logits + medusa_head(hidden_states[:, -num_logits_to_keep:, :]).unsqueeze(0) for medusa_head in self.medusa_heads]
+                if self.use_lora:
+                    medusa_head_logits = [logits + medusa_head(hidden_states[:, -num_logits_to_keep:, :]).unsqueeze(0) for medusa_head in self.medusa_heads]
+                else:
+                    medusa_head_logits = [self.lm_head(medusa_head(hidden_states[:, -num_logits_to_keep:, :])).unsqueeze(0) for medusa_head in self.medusa_heads]
+
                 medusa_head_logits = torch.cat(medusa_head_logits)
                 logits = torch.cat([logits, medusa_head_logits])
 
