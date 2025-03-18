@@ -241,6 +241,7 @@ def run_test(args) -> None:
         target_model(**inputs_dummy)
     torch.cuda.synchronize()
 
+    # Speculative Decoding
     is_end = False
 
     # Record
@@ -253,10 +254,8 @@ def run_test(args) -> None:
     gamma = args.gamma
     max_new_tokens = args.test_token_num
 
-    draft_past_key_values = DynamicCache()
-    target_past_key_values = DynamicCache()
-    # draft_past_key_values = None
-    # target_past_key_values = None
+    draft_past_key_values = None
+    target_past_key_values = None
 
     while not is_end:
         # Draft model
@@ -291,10 +290,69 @@ def run_test(args) -> None:
     generate_token_num = outputs.input_ids.shape[1] - raw_token_num
     spent_time = time.time() - start_time
 
-    print(f"Generate token number: {generate_token_num}")
-    print(f"Generate speed: {generate_token_num / spent_time} tokens/sec")
-    print(f"Speculative Decoding Spent Time: {spent_time} seconds.")
-    print(f"Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
+    print(draft_tokenizer.batch_decode(inputs.input_ids)[0])
+
+    print(f"(Without KV Cache) Generate token number: {generate_token_num}")
+    print(f"(Without KV Cache) Generate speed: {generate_token_num / spent_time} tokens/sec")
+    print(f"(Without KV Cache) Speculative Decoding Spent Time: {spent_time} seconds.")
+    print(f"(Without KV Cache) Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
+
+
+    # KV Cache Speculative Decoding
+    is_end = False
+
+    # Record
+    inputs = copy.deepcopy(raw_inputs)
+    raw_token_num = inputs.input_ids.shape[1]
+    start_time = time.time()
+
+    total_draft_tokens = 0
+    total_accept_tokens = 0
+    gamma = args.gamma
+    max_new_tokens = args.test_token_num
+
+    draft_past_key_values = DynamicCache()
+    target_past_key_values = DynamicCache()
+
+    while not is_end:
+        # Draft model
+        target_inputs, draft_probs, draft_past_key_values = drafter_speculative_decode(
+            draft_model=draft_model,
+            draft_tokenizer=draft_tokenizer,
+            inputs=inputs,
+            gamma=gamma,
+            temperature=0,
+            past_key_values=draft_past_key_values,
+        )
+
+        total_draft_tokens += gamma
+
+        # Target model
+        outputs, is_end, accept_tokens, target_past_key_values = target_speculative_decode(
+            target_model=target_model,
+            target_tokenizer=target_tokenizer,
+            inputs=target_inputs,
+            draft_probs=draft_probs,
+            temperature=0,
+            past_key_values=target_past_key_values,
+        )
+
+        total_accept_tokens += accept_tokens
+
+        inputs = outputs
+
+        if inputs.input_ids.shape[1] - raw_token_num >= max_new_tokens:
+            break
+
+    generate_token_num = outputs.input_ids.shape[1] - raw_token_num
+    spent_time = time.time() - start_time
+
+    print(draft_tokenizer.batch_decode(inputs.input_ids)[0])
+
+    print(f"(KV Cache) Generate token number: {generate_token_num}")
+    print(f"(KV Cache) Generate speed: {generate_token_num / spent_time} tokens/sec")
+    print(f"(KV Cache) Speculative Decoding Spent Time: {spent_time} seconds.")
+    print(f"(KV Cache) Accept Rate: {total_accept_tokens / total_draft_tokens}\n")
 
     # Normal Target Model Speed
     inputs = copy.deepcopy(raw_inputs)

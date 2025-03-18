@@ -572,6 +572,10 @@ class KangarooLlamaForCausalLM(LlamaForCausalLM):
             target_log_probs = torch.nn.functional.log_softmax(target_logits, dim=-1)
             target_probs = torch.nn.functional.softmax(target_logits, dim=-1)
 
+            # Improvement Note
+            # 1. classification cross-entropy hard-label (need to be smaller than normal loss)
+            # 2. draft_temperature = 1.1; target_temperature = 1.0
+
             # Cross-entropy loss between target and draft model predictions
             # kl_loss = torch.nn.functional.kl_div(draft_log_probs, target_probs, reduction="batchmean")
             hard_labels = torch.argmax(target_probs, dim=-1)

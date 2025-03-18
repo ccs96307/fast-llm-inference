@@ -1,4 +1,86 @@
+from functools import wraps
+import time
+import threading
+import subprocess
+
 import torch
+
+
+def log_gpu_status_decorator(log_file_prefix="gpu_log", interval=5, gpu_ids=None):
+    """
+    Decorator to log GPU hardware status periodically during function execution,
+    allowing selection of specific GPUs.
+
+    :param log_file_prefix: Prefix for the log file name. The final name will include a timestamp.
+    :param interval: Interval (in seconds) for logging GPU stats.
+    :param gpu_ids: List of GPU IDs to log. If None, logs all available GPUs.
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            timestamp = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+            log_file_path = f"{log_file_prefix}_{timestamp}.csv"
+
+            stop_event = threading.Event()
+            cumulative_power = {}
+
+            def log_gpu_status():
+                """
+                Logs GPU hardware stats and calculates cumulative power consumption.
+                """
+                with open(log_file_path, "w") as log_file:
+                    log_file.write("timestamp,gpu_id,temperature,power_draw,utilization_gpu,memory_used,cumulative_power\n")
+                try:
+                    while not stop_event.is_set():
+                        log_timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+                        
+                        # Run nvidia-smi to fetch GPU stats
+                        result = subprocess.run(
+                            ["nvidia-smi", 
+                             "--query-gpu=index,temperature.gpu,power.draw,utilization.gpu,memory.used", 
+                             "--format=csv,noheader,nounits"],
+                            stdout=subprocess.PIPE, text=True
+                        )
+                        
+                        gpu_info = result.stdout.strip()
+                        if gpu_info:
+                            for line in gpu_info.splitlines():
+                                fields = line.split(", ")
+                                gpu_id = int(fields[0])
+
+                                # Skip GPUs not in the specified list
+                                if gpu_ids is not None and gpu_id not in gpu_ids:
+                                    continue
+
+                                power_draw = float(fields[2])  # Current power draw in watts
+
+                                # Update cumulative power consumption
+                                if gpu_id not in cumulative_power:
+                                    cumulative_power[gpu_id] = 0.0
+                                cumulative_power[gpu_id] += power_draw * (interval / 3600)  # kWh formula
+
+                                # Log data with cumulative power
+                                log_entry = f"{log_timestamp},{line},{cumulative_power[gpu_id]:.6f}\n"
+                                with open(log_file_path, "a") as log_file:
+                                    log_file.write(log_entry)
+
+                        time.sleep(interval)
+                except Exception as e:
+                    print(f"Error during GPU logging: {e}")
+
+            log_thread = threading.Thread(target=log_gpu_status, daemon=True)
+            log_thread.start()
+            
+            try:
+                return func(*args, **kwargs)
+            finally:
+                stop_event.set()
+                log_thread.join()
+                print(f"GPU logging stopped. Logs saved to: {log_file_path}")
+
+        return wrapper
+    return decorator
+
 
 
 class AdaptiveDraftExitAduster:
