@@ -38,7 +38,7 @@ from transformers.models.llama.modeling_llama import LlamaModel
 from transformers.cache_utils import Cache
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from utils.lora import LoRALinear
+# from utils.lora import LoRALinear
 
 
 @dataclass

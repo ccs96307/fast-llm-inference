@@ -11,6 +11,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 
 from medusa_modeling.modeling_medusa_llama import MedusaLlamaForCausalLM
+from utils.utils import log_gpu_status_decorator
 
 
 class CustomMedusaDataset(Dataset):
@@ -120,6 +121,7 @@ def reshape_labels_with_offset(
     return updated_logits_labels, updated_labels, updated_attention_mask
     
 
+@log_gpu_status_decorator(log_file_prefix="medusa_training", interval=5, gpu_ids=[0])
 def main() -> None:
     # Settings
     epochs = 100
@@ -127,17 +129,16 @@ def main() -> None:
     accumulation_steps = 4
     max_length = 512
     lr = 5e-5
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    alpha = 0.2
     head_num = 5
     lambda_k = 0.8
     use_self_generated_labels = True
     print(f"Device: {device}")
 
     # Load model and tokenizer
-    pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3.1-8B-Instruct"
-    # pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3-8B-Instruct"
+    # pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3.1-8B-Instruct"
     pretrained_model_name_or_path = "../models/HuggingFaceTB--SmolLM2-135M-Instruct"
-    # pretrained_model_name_or_path = "../models/lmsys--vicuna-7b-v1.3"
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 
