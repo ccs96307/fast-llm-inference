@@ -63,6 +63,7 @@ def collate_fn(
 
 
 def reshape_labels_with_offset(
+    raw_logits_labels: torch.LongTensor,
     input_ids: torch.LongTensor,
     head_num: int,
     tokenizer: AutoTokenizer,
@@ -73,6 +74,13 @@ def reshape_labels_with_offset(
     seq_len = seq_len_with_head_num_padding - head_num - 1
 
     # Init null logits
+    updated_logits_labels = torch.full(
+        (head_num, batch_size, seq_len),
+        tokenizer.pad_token_id,
+        dtype=input_ids.dtype,
+        device=input_ids.device,
+    )
+
     updated_labels = torch.full(
         (head_num, batch_size, seq_len),
         tokenizer.pad_token_id,
@@ -96,6 +104,12 @@ def reshape_labels_with_offset(
     # head_idx 3: [:, 5:517]
     # head_idx 4: [:, 6:518]
     for head_idx in range(head_num):
+        # Update logits labels
+        start_idx = head_idx + 1
+        end_idx = seq_len + head_idx + 1
+        updated_logits_labels[head_idx] = raw_logits_labels[..., start_idx:end_idx]
+        
+        # Update labels
         start_idx = head_idx + 2
         end_idx = seq_len + head_idx + 2
         updated_labels[head_idx] = input_ids[:, start_idx:end_idx]
@@ -103,26 +117,27 @@ def reshape_labels_with_offset(
         if raw_attention_mask is not None:
             updated_attention_mask[head_idx] = raw_attention_mask[:, start_idx:end_idx]
 
-    return updated_labels, updated_attention_mask
+    return updated_logits_labels, updated_labels, updated_attention_mask
     
 
 def main() -> None:
     # Settings
     epochs = 100
-    batch_size = 4
+    batch_size = 1
     accumulation_steps = 4
     max_length = 512
     lr = 5e-5
     device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
-    head_num = 1
-    lambda_k = 1
+    head_num = 5
+    lambda_k = 0.8
+    use_self_generated_labels = True
     print(f"Device: {device}")
 
     # Load model and tokenizer
     pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3.1-8B-Instruct"
     # pretrained_model_name_or_path = "../models/meta-llama--Meta-Llama-3-8B-Instruct"
-    # pretrained_model_name_or_path = "../models/HuggingFaceTB--SmolLM2-135M-Instruct"
-    pretrained_model_name_or_path = "../models/lmsys--vicuna-7b-v1.3"
+    pretrained_model_name_or_path = "../models/HuggingFaceTB--SmolLM2-135M-Instruct"
+    # pretrained_model_name_or_path = "../models/lmsys--vicuna-7b-v1.3"
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path)
     tokenizer.pad_token = tokenizer.eos_token
 
@@ -148,16 +163,19 @@ def main() -> None:
 
     # Count parameters
     total_params = model.num_parameters()
-    print(f"`MedusaModel` has {total_params:,} parameters.")
-
-    # Count trainable parameters
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"`MedusaModel` has {trainable_params:,} trainable parameters.")
+
+    # Get the maximum width of parameter count
+    param_width = len(f"{total_params:,}")
+
+    # Format and print
+    print(f"`MedusaModel` has {total_params:,} parameters.")
+    print(f"`MedusaModel` has {f'{trainable_params:,}'.rjust(param_width)} trainable parameters.")
 
     # Load dataset
     # dataset = load_from_disk()
-    # dataset = load_dataset("shibing624/sharegpt_gpt4")
-    dataset = load_dataset("Aeala/ShareGPT_Vicuna_unfiltered")
+    dataset = load_dataset("shibing624/sharegpt_gpt4")
+    # dataset = load_dataset("Aeala/ShareGPT_Vicuna_unfiltered")
     
     samples = dataset["train"]["conversations"]
     new_samples = []
@@ -195,10 +213,24 @@ def main() -> None:
 
     # Training loop
     print("Start to train.")
+    diff_head_top_k_accept = [
+        {
+            1: {
+                "total": [],
+                "accept": [],
+            },
+            3: {
+                "total": [],
+                "accept": [],
+            },
+        } for _ in range(head_num)
+    ]
+
     for epoch in range(epochs):
         model.train()
         total_loss = 0
         train_loss_history = []
+        heads_loss_histories = {k: [] for k in range(head_num)}
         eval_loss_history = []
 
         accumulation_loss = 0.0
@@ -213,11 +245,13 @@ def main() -> None:
 
             logits = outputs.logits
 
+            # Reshape and offset the raw_logits, and the shape must to satisfy the heads_logits
             raw_logits = logits[:1, ...]
+            raw_logits_labels = torch.argmax(raw_logits, dim=-1)
             heads_logits = logits[1:, :, :-head_num-1, :]
 
-            # Reshape and offset the raw_logits, and the shape must to satisfy the heads_logits
-            target_labels, target_attention_mask = reshape_labels_with_offset(
+            target_logits_labels, target_labels, target_attention_mask = reshape_labels_with_offset(
+                raw_logits_labels=raw_logits_labels,
                 input_ids=input_ids,
                 head_num=head_num,
                 tokenizer=tokenizer,
@@ -228,28 +262,18 @@ def main() -> None:
             # draft_log_probs = torch.nn.functional.log_softmax(heads_logits, dim=-1)
 
             loss = 0.0
-            top_k_accept = {
-                1: {
-                    "total": [],
-                    "accept": [],
-                },
-                3: {
-                    "total": [],
-                    "accept": [],
-                },
-            }
-
             for k in range(head_num):
                 curr_lambda_k = pow(lambda_k, k + 1)
 
                 # Extract the k-th head's logits
                 k_head_logits = heads_logits[k].contiguous().view(-1, heads_logits.shape[-1])  # Shape: (batch_size, seq_len, vocab_size) -> (batch_size * seq_len, vocab_size)
+                k_logits_labels = target_logits_labels[k].contiguous().view(-1)
                 k_target_labels = target_labels[k].contiguous().view(-1)
 
                 # Compute hard labels and soft labels cross entropy loss
                 hard_label_loss = torch.nn.functional.cross_entropy(
                     k_head_logits,  # Flatten logits
-                    k_target_labels,  # Flatten hard labels
+                    k_logits_labels if use_self_generated_labels else k_target_labels,  # Flatten hard labels
                     ignore_index=tokenizer.pad_token_id,
                 )
 
@@ -265,10 +289,11 @@ def main() -> None:
                     # Check if predictions match the target labels
                     correct = not_ignore_topk.eq(not_ignore_k_target_labels.unsqueeze(-1)).any(-1)
 
-                    top_k_accept[_k]["total"].append(not_ignore.sum().item())
-                    top_k_accept[_k]["accept"].append(correct.sum().item())
+                    diff_head_top_k_accept[k][_k]["total"].append(not_ignore.sum().item())
+                    diff_head_top_k_accept[k][_k]["accept"].append(correct.sum().item())
 
                 head_loss = hard_label_loss
+                heads_loss_histories[k].append(head_loss.item())
                 loss += curr_lambda_k * head_loss
             
             # Accumulation
@@ -291,13 +316,18 @@ def main() -> None:
                 avg_loss = total_loss / (batch_idx / accumulation_steps)
                 accumulation_loss = 0.0
 
-                top_1_accept = top_k_accept[1]["accept"][-1] / top_k_accept[1]["total"][-1]
-                top_3_accept = top_k_accept[3]["accept"][-1] / top_k_accept[3]["total"][-1]
-                print(f"Train - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(train_dataloader)}], Training Loss: {avg_loss:.4f}, Top-1 Acc: {top_1_accept}, Top-3 Acc: {top_3_accept}")
+                print("="*70)
+                for k in range(head_num):
+                    top_1_accept = diff_head_top_k_accept[k][1]["accept"][-1] / diff_head_top_k_accept[k][1]["total"][-1]
+                    top_3_accept = diff_head_top_k_accept[k][3]["accept"][-1] / diff_head_top_k_accept[k][3]["total"][-1]
+                    head_loss = sum(heads_loss_histories[k]) / len(heads_loss_histories[k])
+                    print(f"Train - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(train_dataloader)}], Head [{k+1}/{head_num}], Training Loss: {head_loss:.4f}, Top-1 Acc: {top_1_accept:.4f}, Top-3 Acc: {top_3_accept:.4f}")
 
         # Evaluate the model
         model.eval()
         eval_loss = 0
+        heads_loss_histories = {k: [] for k in range(head_num)}
+
         with torch.no_grad():
             for batch_idx, batch in enumerate(eval_dataloader, 1):
                 input_ids, attention_mask = batch
@@ -309,40 +339,34 @@ def main() -> None:
                 )
 
                 logits = outputs.logits
-                raw_logits = logits[:1, ...]
-                heads_logits = logits[1:, :, :-head_num-1, :]
 
                 # Reshape and offset the raw_logits, and the shape must to satisfy the heads_logits
-                target_labels, target_attention_mask = reshape_labels_with_offset(
+                raw_logits = logits[:1, ...]
+                raw_logits_labels = torch.argmax(raw_logits, dim=-1)
+                heads_logits = logits[1:, :, :-head_num-1, :]
+
+                target_logits_labels, target_labels, target_attention_mask = reshape_labels_with_offset(
+                    raw_logits_labels=raw_logits_labels,
                     input_ids=input_ids,
                     head_num=head_num,
                     tokenizer=tokenizer,
                     raw_attention_mask=attention_mask,
                 )
-
+    
                 loss = 0.0
-                top_k_accept = {
-                    1: {
-                        "total": [],
-                        "accept": [],
-                    },
-                    3: {
-                        "total": [],
-                        "accept": [],
-                    },
-                }
-
                 for k in range(head_num):
                     curr_lambda_k = pow(lambda_k, k + 1)
 
                     # Extract the k-th head's logits
                     k_head_logits = heads_logits[k].contiguous().view(-1, heads_logits.shape[-1])  # Shape: (batch_size, seq_len, vocab_size) -> (batch_size * seq_len, vocab_size)
+                    # k_head_logits = torch.nn.LogSoftmax(dim=-1)(k_head_logits)
+                    k_logits_labels = target_logits_labels[k].contiguous().view(-1)
                     k_target_labels = target_labels[k].contiguous().view(-1)
 
                     # Compute hard labels and soft labels cross entropy loss
                     hard_label_loss = torch.nn.functional.cross_entropy(
                         k_head_logits,  # Flatten logits
-                        k_target_labels,  # Flatten hard labels
+                        k_logits_labels if use_self_generated_labels else k_target_labels,  # Flatten hard labels
                         ignore_index=tokenizer.pad_token_id,
                     )
 
@@ -358,10 +382,11 @@ def main() -> None:
                         # Check if predictions match the target labels
                         correct = not_ignore_topk.eq(not_ignore_k_target_labels.unsqueeze(-1)).any(-1)
 
-                        top_k_accept[_k]["total"].append(not_ignore.sum().item())
-                        top_k_accept[_k]["accept"].append(correct.sum().item())
+                        diff_head_top_k_accept[k][_k]["total"].append(not_ignore.sum().item())
+                        diff_head_top_k_accept[k][_k]["accept"].append(correct.sum().item())
 
                     head_loss = hard_label_loss
+                    heads_loss_histories[k].append(head_loss.item())
                     loss += curr_lambda_k * head_loss
 
                 eval_loss += loss.item()
@@ -369,12 +394,15 @@ def main() -> None:
 
                 avg_loss = eval_loss / batch_idx
 
-                top_1_accept = top_k_accept[1]["accept"][-1] / top_k_accept[1]["total"][-1]
-                top_3_accept = top_k_accept[3]["accept"][-1] / top_k_accept[3]["total"][-1]
-                print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(eval_dataloader)}], Eval Loss: {avg_loss:.4f}, Top-1 Acc: {top_1_accept}, Top-3 Acc: {top_3_accept}")
+                print("="*70)
+                for k in range(head_num):
+                    top_1_accept = diff_head_top_k_accept[k][1]["accept"][-1] / diff_head_top_k_accept[k][1]["total"][-1]
+                    top_3_accept = diff_head_top_k_accept[k][3]["accept"][-1] / diff_head_top_k_accept[k][3]["total"][-1]
+                    head_loss = sum(heads_loss_histories[k]) / len(heads_loss_histories[k])
+                    print(f"Eval - Epoch [{epoch + 1}/{epochs}] Steps [{batch_idx}/{len(train_dataloader)}], Head [{k+1}/{head_num}], Eval Loss: {head_loss:.4f}, Top-1 Acc: {top_1_accept:.4f}, Top-3 Acc: {top_3_accept:.4f}")
 
         # Save model checkpoint
-        save_dir = "./checkpoints/vicuna_1.3_checkpoints_hce_linear_20241219/"
+        save_dir = "./checkpoints/llama_3_checkpoints_hce_linear_20250102/"
         save_path = os.path.join(save_dir, f"epoch_{epoch+1}")
         model.save_heads(
             save_path,

@@ -110,12 +110,6 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             medusa_heads = [
                 torch.nn.Sequential(
                     *([ResBlock(hidden_size=self.config.hidden_size)] * 3),
-                    # torch.nn.Linear(
-                    #     self.config.hidden_size,
-                    #     self.config.vocab_size,
-                    #     bias=False,
-                    #     dtype=torch_dtype,
-                    # ),
                 )
                 for _ in range(head_num)
             ]
@@ -280,18 +274,23 @@ class MedusaLlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin):
             logits = [F.linear(hidden_states, lm_head_slices[i]) for i in range(self.config.pretraining_tp)]
             logits = torch.cat(logits, dim=-1)
         else:
-            # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
-            logits = self.lm_head(hidden_states[:, -num_logits_to_keep:, :])
-
+            selected_hidden_states = hidden_states[:, -num_logits_to_keep:, :]
             if self._mode == MedusaModelMode.draft_mode:
-                logits = logits.unsqueeze(0)
                 if self.use_lora:
-                    medusa_head_logits = [logits + medusa_head(hidden_states[:, -num_logits_to_keep:, :]).unsqueeze(0) for medusa_head in self.medusa_heads]
+                    logits = self.lm_head(selected_hidden_states).unsqueeze(0)
+                    medusa_head_logits = [logits + medusa_head(selected_hidden_states).unsqueeze(0) for medusa_head in self.medusa_heads]
+                    medusa_head_logits = torch.cat(medusa_head_logits, dim=0)
+                    logits = torch.cat([logits, medusa_head_logits], dim=0)
                 else:
-                    medusa_head_logits = [self.lm_head(medusa_head(hidden_states[:, -num_logits_to_keep:, :])).unsqueeze(0) for medusa_head in self.medusa_heads]
-
-                medusa_head_logits = torch.cat(medusa_head_logits)
-                logits = torch.cat([logits, medusa_head_logits])
+                    selected_hidden_states = selected_hidden_states.unsqueeze(0)
+                    futures = [torch.jit.fork(medusa_head, selected_hidden_states) for medusa_head in self.medusa_heads]
+                    medusa_head_hidden_states = torch.cat([torch.jit.wait(future) for future in futures], dim=0)
+                    
+                    selected_hidden_states = torch.cat([selected_hidden_states, medusa_head_hidden_states], dim=0)
+                    logits = self.lm_head(selected_hidden_states)
+            else:
+                # Only compute necessary logits, and do not upcast them to float if we are not computing the loss
+                logits = self.lm_head(selected_hidden_states)
 
         loss = None
         if labels is not None:
