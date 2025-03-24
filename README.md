@@ -45,7 +45,11 @@ I'm excited to dive deeper into AI research!
   - [X] Medusa model
   - [X] Training Script (Medusa-1)
   - [ ] Testing
-- [ ] **2024/12/20** | Implement `Eagle` from
+- [ ] **2025/03** | Implement `Hydra` from [Hydra: Sequentially-Dependent Draft Heads for Medusa Decoding](https://arxiv.org/abs/2402.05109)
+- [ ] **2025/03** | Implement `Lookahead Decoding` from [Break the Sequential Dependency of LLM Inference Using Lookahead Decoding](https://arxiv.org/abs/2402.02057)
+- [ ] **2025/04** | Implement `Eagle` from [EAGLE: Speculative Sampling Requires Rethinking Feature Uncertainty](https://arxiv.org/abs/2401.15077)
+- [ ] **2025/04** | Implement `Eagle-2` from [EAGLE-2: Faster Inference of Language Models with Dynamic Draft Trees](https://arxiv.org/abs/2406.16858)
+- [ ] **2025/04** | Implement `Eagle-3` from [EAGLE-3: Scaling up Inference Acceleration of Large Language Models via Training-Time Test](https://arxiv.org/abs/2503.01840)
 
 
 ### Additional Enhancements
