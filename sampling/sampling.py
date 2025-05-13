@@ -78,6 +78,9 @@ def sample_next_token(
             repetition_penalty=repetition_penalty,
         )
 
+    # Clamp logits to prevent overflow in float16
+    curr_logits = curr_logits.clamp(min=-50.0, max=50.0)
+
     # Apply temperature
     curr_logits = curr_logits / (temperature + eps)
 
