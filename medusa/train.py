@@ -23,10 +23,10 @@ class CustomMedusaDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.input_data)
-    
+
     def __getitem__(self, idx: int) -> str:
         return self.input_data[idx]
-    
+
 
 def collate_fn(
     batch: List[str],
